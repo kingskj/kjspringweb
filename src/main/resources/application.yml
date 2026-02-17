@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: kjspringweb
+
+  datasource:
+    url: jdbc:h2:file:/home/kingofkj78/kjweb/data/kjwebdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  thymeleaf:
+    cache: false
+    encoding: UTF-8
+
+server:
+  port: 8080
+
+logging:
+  level:
+    com.kjweb: DEBUG
+    org.springframework.security: INFO

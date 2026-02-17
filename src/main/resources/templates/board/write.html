@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('글쓰기')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container mt-4">
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0">
+                <i class="bi bi-pencil-square"></i>
+                <span th:text="${board != null} ? '글 수정' : '글쓰기'"></span>
+            </h5>
+        </div>
+        <div class="card-body">
+            <form th:action="${board != null} ? @{/board/edit/{id}(id=${board.id})} : @{/board/write}"
+                  th:object="${boardDto}" method="post">
+                <div class="mb-3">
+                    <label class="form-label">제목 *</label>
+                    <input type="text" th:field="*{title}"
+                           class="form-control" th:classappend="${#fields.hasErrors('title')} ? 'is-invalid'"
+                           placeholder="제목을 입력하세요">
+                    <div class="invalid-feedback" th:errors="*{title}"></div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">내용 *</label>
+                    <textarea th:field="*{content}"
+                              class="form-control" th:classappend="${#fields.hasErrors('content')} ? 'is-invalid'"
+                              rows="15" placeholder="내용을 입력하세요"></textarea>
+                    <div class="invalid-feedback" th:errors="*{content}"></div>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <a href="/board" class="btn btn-secondary">
+                        <i class="bi bi-arrow-left"></i> 취소
+                    </a>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-lg"></i>
+                        <span th:text="${board != null} ? '수정 완료' : '등록'"></span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+</body>
+</html>

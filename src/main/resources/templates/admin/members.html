@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('회원관리')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-md-2">
+            <div class="list-group">
+                <a href="/admin" class="list-group-item list-group-item-action">
+                    <i class="bi bi-speedometer2"></i> 대시보드
+                </a>
+                <a href="/admin/members" class="list-group-item list-group-item-action active">
+                    <i class="bi bi-people"></i> 회원관리
+                </a>
+                <a href="/admin/menus" class="list-group-item list-group-item-action">
+                    <i class="bi bi-list-nested"></i> 메뉴관리
+                </a>
+            </div>
+        </div>
+        <div class="col-md-10">
+            <div th:replace="~{fragments/layout :: alerts}"></div>
+            <h4><i class="bi bi-people"></i> 회원관리</h4>
+            <hr>
+            <div class="card shadow-sm">
+                <table class="table table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>ID</th>
+                            <th>아이디</th>
+                            <th>닉네임</th>
+                            <th>이메일</th>
+                            <th>역할</th>
+                            <th>상태</th>
+                            <th>가입일</th>
+                            <th>관리</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr th:each="member : ${members.content}">
+                            <td th:text="${member.id}"></td>
+                            <td th:text="${member.username}"></td>
+                            <td th:text="${member.nickname}"></td>
+                            <td th:text="${member.email}" class="small"></td>
+                            <td>
+                                <span th:each="role : ${member.roles}"
+                                      class="badge"
+                                      th:classappend="${role.name == 'ROLE_ADMIN'} ? 'bg-danger' : 'bg-secondary'"
+                                      th:text="${role.name.replace('ROLE_', '')}"></span>
+                            </td>
+                            <td>
+                                <span class="badge"
+                                      th:classappend="${member.status.name() == 'ACTIVE'} ? 'bg-success' : (${member.status.name() == 'BANNED'} ? 'bg-danger' : 'bg-warning')"
+                                      th:text="${member.status}"></span>
+                            </td>
+                            <td th:text="${#temporals.format(member.createdAt, 'yyyy-MM-dd')}" class="small"></td>
+                            <td>
+                                <form th:action="@{/admin/members/{id}/status(id=${member.id})}" method="post"
+                                      style="display: inline;">
+                                    <select name="status" class="form-select form-select-sm d-inline w-auto"
+                                            onchange="this.form.submit()">
+                                        <option th:each="s : ${T(com.kjweb.domain.entity.Member.MemberStatus).values()}"
+                                                th:value="${s}" th:text="${s}"
+                                                th:selected="${s == member.status}"></option>
+                                    </select>
+                                </form>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+</body>
+</html>

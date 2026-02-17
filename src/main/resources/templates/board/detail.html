@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      xmlns:sec="http://www.thymeleaf.org/extras/spring-security">
+<head th:replace="~{fragments/layout :: head('게시글')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container mt-4">
+    <div th:replace="~{fragments/layout :: alerts}"></div>
+
+    <div class="card shadow-sm">
+        <div class="card-header">
+            <h5 class="mb-0" th:text="${board.title}"></h5>
+        </div>
+        <div class="card-body">
+            <div class="d-flex justify-content-between text-muted small mb-3">
+                <span><i class="bi bi-person"></i> <span th:text="${board.author.nickname}"></span></span>
+                <span>
+                    <i class="bi bi-eye"></i> <span th:text="${board.viewCount}"></span>
+                    &nbsp;|&nbsp;
+                    <i class="bi bi-calendar"></i>
+                    <span th:text="${#temporals.format(board.createdAt, 'yyyy-MM-dd HH:mm')}"></span>
+                </span>
+            </div>
+            <hr>
+            <div th:text="${board.content}" style="white-space: pre-wrap; min-height: 200px;"></div>
+        </div>
+        <div class="card-footer d-flex justify-content-between">
+            <a href="/board" class="btn btn-secondary btn-sm">
+                <i class="bi bi-arrow-left"></i> 목록
+            </a>
+            <div sec:authorize="isAuthenticated()">
+                <a th:href="@{/board/edit/{id}(id=${board.id})}"
+                   th:if="${#authentication.name == board.author.username}"
+                   class="btn btn-warning btn-sm me-1">
+                    <i class="bi bi-pencil"></i> 수정
+                </a>
+                <form th:action="@{/board/delete/{id}(id=${board.id})}" method="post"
+                      style="display: inline;"
+                      th:if="${#authentication.name == board.author.username or #authorization.expression('hasRole(''ADMIN'')')}">
+                    <button type="submit" class="btn btn-danger btn-sm"
+                            onclick="return confirm('정말 삭제하시겠습니까?')">
+                        <i class="bi bi-trash"></i> 삭제
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+</body>
+</html>
