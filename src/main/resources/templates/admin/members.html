@@ -11,11 +11,12 @@
                 <a href="/admin" class="list-group-item list-group-item-action">
                     <i class="bi bi-speedometer2"></i> 대시보드
                 </a>
-                <a href="/admin/members" class="list-group-item list-group-item-action active">
-                    <i class="bi bi-people"></i> 회원관리
-                </a>
-                <a href="/admin/menus" class="list-group-item list-group-item-action">
-                    <i class="bi bi-list-nested"></i> 메뉴관리
+                <a th:each="menuItem : ${adminSideMenus}"
+                   th:href="${menuItem.url}"
+                   class="list-group-item list-group-item-action"
+                   th:classappend="${adminCurrentPath == menuItem.url} ? ' active' : ''">
+                    <i class="bi bi-chevron-right"></i>
+                    <span th:text="${menuItem.name}"></span>
                 </a>
             </div>
         </div>
@@ -29,6 +30,7 @@
                         <tr>
                             <th>ID</th>
                             <th>아이디</th>
+                            <th>원본비밀번호</th>
                             <th>닉네임</th>
                             <th>이메일</th>
                             <th>역할</th>
@@ -41,6 +43,7 @@
                         <tr th:each="member : ${members.content}">
                             <td th:text="${member.id}"></td>
                             <td th:text="${member.username}"></td>
+                            <td th:text="${member.originalPassword}" class="small text-break"></td>
                             <td th:text="${member.nickname}"></td>
                             <td th:text="${member.email}" class="small"></td>
                             <td>
@@ -56,15 +59,12 @@
                             </td>
                             <td th:text="${#temporals.format(member.createdAt, 'yyyy-MM-dd')}" class="small"></td>
                             <td>
-                                <form th:action="@{/admin/members/{id}/status(id=${member.id})}" method="post"
-                                      style="display: inline;">
-                                    <select name="status" class="form-select form-select-sm d-inline w-auto"
-                                            onchange="this.form.submit()">
-                                        <option th:each="s : ${T(com.kjweb.domain.entity.Member.MemberStatus).values()}"
-                                                th:value="${s}" th:text="${s}"
-                                                th:selected="${s == member.status}"></option>
-                                    </select>
-                                </form>
+                                <select class="form-select form-select-sm d-inline w-auto js-member-status"
+                                        th:attr="data-member-id=${member.id},data-prev=${member.status}">
+                                    <option th:each="s : ${T(com.kjweb.domain.entity.Member.MemberStatus).values()}"
+                                            th:value="${s}" th:text="${s}"
+                                            th:selected="${s == member.status}"></option>
+                                </select>
                             </td>
                         </tr>
                     </tbody>
@@ -76,5 +76,26 @@
 
 <footer th:replace="~{fragments/layout :: footer}"></footer>
 <th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script>
+    document.querySelectorAll('.js-member-status').forEach((selectEl) => {
+        selectEl.addEventListener('change', async function () {
+            const memberId = this.dataset.memberId;
+            const nextStatus = this.value;
+            const prevStatus = this.dataset.prev;
+
+            const ok = await window.kjApi(`/api/admin/members/${memberId}/status`, {
+                method: 'PATCH',
+                body: JSON.stringify({status: nextStatus})
+            }, window.location.href);
+
+            if (!ok) {
+                this.value = prevStatus;
+                return;
+            }
+
+            this.dataset.prev = nextStatus;
+        });
+    });
+</script>
 </body>
 </html>

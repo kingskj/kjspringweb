@@ -13,6 +13,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.http.HttpMethod;
 
 @Configuration
 @EnableWebSecurity
@@ -46,10 +47,10 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // 공개 경로
                 .requestMatchers("/", "/auth/**", "/css/**", "/js/**", "/h2-console/**").permitAll()
-                // 게시판 읽기는 누구나
-                .requestMatchers("/board", "/board/{id}").permitAll()
                 // 게시판 쓰기는 로그인 필요
                 .requestMatchers("/board/write", "/board/edit/**", "/board/delete/**").hasAnyRole("USER", "ADMIN")
+                // 게시판 읽기는 누구나
+                .requestMatchers(HttpMethod.GET, "/board", "/board/**").permitAll()
                 // 관리자 전용
                 .requestMatchers("/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()

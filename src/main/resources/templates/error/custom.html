@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{fragments/layout :: head('오류')}"></head>
+<body>
+<nav th:replace="~{fragments/layout :: navbar}"></nav>
+
+<div class="container mt-5">
+    <div class="card border-danger shadow-sm">
+        <div class="card-header bg-danger text-white">
+            <h5 class="mb-0"><i class="bi bi-exclamation-triangle-fill"></i> 커스텀 오류</h5>
+        </div>
+        <div class="card-body">
+            <p class="mb-2"><strong>오류 코드:</strong> <span th:text="${errorCode}">E500</span></p>
+            <p class="mb-2"><strong>메시지:</strong> <span th:text="${errorMessage}">시스템 오류가 발생했습니다</span></p>
+            <p class="mb-2"><strong>상세:</strong> <span th:text="${errorDetail}">Unknown error</span></p>
+            <p class="mb-2"><strong>요청 경로:</strong> <code th:text="${path}">/</code></p>
+            <p class="mb-0"><strong>발생 시각:</strong> <span th:text="${#temporals.format(timestamp, 'yyyy-MM-dd HH:mm:ss')}">-</span></p>
+        </div>
+        <div class="card-footer d-flex justify-content-between">
+            <a href="/" class="btn btn-secondary btn-sm">
+                <i class="bi bi-house"></i> 홈으로
+            </a>
+            <a href="javascript:history.back()" class="btn btn-outline-danger btn-sm">
+                이전 화면
+            </a>
+        </div>
+    </div>
+</div>
+
+<footer th:replace="~{fragments/layout :: footer}"></footer>
+<th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="javascript">
+    alert('오류: ' + /*[[${errorMessage}]]*/ 'Unknown error');
+</script>
+</body>
+</html>

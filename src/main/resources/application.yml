@@ -3,32 +3,58 @@ spring:
     name: kjspringweb
 
   datasource:
-    url: jdbc:h2:file:/home/kingofkj78/kjweb/data/kjwebdb
+    url: ${DB_URL:jdbc:h2:file:/home/kingofkj78/kjweb/data/kjwebdb}
     driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
+    hikari:
+      pool-name: kjweb-hikari
+      maximum-pool-size: ${DB_POOL_MAX:5}
+      minimum-idle: ${DB_POOL_MIN:1}
+      connection-timeout: ${DB_CONN_TIMEOUT_MS:3000}
+      validation-timeout: ${DB_VALIDATION_TIMEOUT_MS:1000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:300000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:900000}
+      keepalive-time: ${DB_KEEPALIVE_MS:300000}
 
   h2:
     console:
-      enabled: true
+      enabled: ${H2_CONSOLE_ENABLED:false}
       path: /h2-console
 
   jpa:
+    open-in-view: false
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
 
   thymeleaf:
-    cache: false
+    cache: ${THYMELEAF_CACHE:true}
     encoding: UTF-8
 
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+  batch:
+    job:
+      enabled: false
+
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  tomcat:
+    threads:
+      max: ${TOMCAT_THREADS_MAX:80}
+      min-spare: ${TOMCAT_THREADS_MIN_SPARE:10}
+    max-connections: ${TOMCAT_MAX_CONNECTIONS:2000}
+    accept-count: ${TOMCAT_ACCEPT_COUNT:100}
+    connection-timeout: 5s
+    keep-alive-timeout: 20s
 
 logging:
   level:
-    com.kjweb: DEBUG
-    org.springframework.security: INFO
+    com.kjweb: ${APP_LOG_LEVEL:INFO}
+    org.springframework.security: WARN

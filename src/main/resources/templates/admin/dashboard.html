@@ -9,14 +9,16 @@
         <!-- 사이드바 -->
         <div class="col-md-2">
             <div class="list-group">
-                <a href="/admin" class="list-group-item list-group-item-action active">
+                <a href="/admin" class="list-group-item list-group-item-action"
+                   th:classappend="${adminCurrentPath == '/admin'} ? ' active' : ''">
                     <i class="bi bi-speedometer2"></i> 대시보드
                 </a>
-                <a href="/admin/members" class="list-group-item list-group-item-action">
-                    <i class="bi bi-people"></i> 회원관리
-                </a>
-                <a href="/admin/menus" class="list-group-item list-group-item-action">
-                    <i class="bi bi-list-nested"></i> 메뉴관리
+                <a th:each="menuItem : ${adminSideMenus}"
+                   th:href="${menuItem.url}"
+                   class="list-group-item list-group-item-action"
+                   th:classappend="${adminCurrentPath == menuItem.url} ? ' active' : ''">
+                    <i class="bi bi-chevron-right"></i>
+                    <span th:text="${menuItem.name}"></span>
                 </a>
             </div>
         </div>

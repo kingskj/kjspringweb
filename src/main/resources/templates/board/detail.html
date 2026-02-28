@@ -31,7 +31,7 @@
             </a>
             <div sec:authorize="isAuthenticated()">
                 <a th:href="@{/board/edit/{id}(id=${board.id})}"
-                   th:if="${#authentication.name == board.author.username}"
+                   th:if="${#authentication.name == board.author.username or #authorization.expression('hasRole(''ADMIN'')')}"
                    class="btn btn-warning btn-sm me-1">
                     <i class="bi bi-pencil"></i> 수정
                 </a>

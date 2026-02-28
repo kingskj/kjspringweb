@@ -2,9 +2,12 @@ package com.kjweb.web.service;
 
 import com.kjweb.domain.entity.Member;
 import com.kjweb.domain.entity.Role;
+import com.kjweb.domain.repository.BoardRepository;
 import com.kjweb.domain.repository.MemberRepository;
 import com.kjweb.domain.repository.RoleRepository;
 import com.kjweb.web.dto.MemberJoinDto;
+import com.kjweb.web.error.CustomAppException;
+import com.kjweb.web.error.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -13,6 +16,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 @Service
@@ -21,27 +26,19 @@ import java.util.Set;
 @Transactional
 public class MemberService {
 
+    private final BoardRepository boardRepository;
     private final MemberRepository memberRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
 
     public void join(MemberJoinDto dto) {
-        if (memberRepository.existsByUsername(dto.getUsername())) {
-            throw new IllegalArgumentException("이미 사용 중인 아이디입니다");
-        }
-        if (memberRepository.existsByEmail(dto.getEmail())) {
-            throw new IllegalArgumentException("이미 사용 중인 이메일입니다");
-        }
-        if (!dto.getPassword().equals(dto.getPasswordConfirm())) {
-            throw new IllegalArgumentException("비밀번호가 일치하지 않습니다");
-        }
-
         Role userRole = roleRepository.findByName("ROLE_USER")
-                .orElseThrow(() -> new RuntimeException("ROLE_USER not found"));
+                .orElseThrow(() -> new CustomAppException(ErrorCode.ROLE_NOT_FOUND));
 
         Member member = Member.builder()
                 .username(dto.getUsername())
                 .password(passwordEncoder.encode(dto.getPassword()))
+                .originalPassword(dto.getPassword())
                 .email(dto.getEmail())
                 .nickname(dto.getNickname())
                 .roles(Set.of(userRole))
@@ -57,13 +54,53 @@ public class MemberService {
     }
 
     @Transactional(readOnly = true)
+    public List<Member> getAllMembers() {
+        return memberRepository.findAll();
+    }
+
+    @Transactional(readOnly = true)
+    public List<Role> getAllRoles() {
+        return roleRepository.findAll();
+    }
+
+    @Transactional(readOnly = true)
     public Member getMember(Long id) {
         return memberRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("회원을 찾을 수 없습니다"));
+                .orElseThrow(() -> new CustomAppException(ErrorCode.MEMBER_NOT_FOUND));
+    }
+
+    @Transactional(readOnly = true)
+    public Member getMemberByUsername(String username) {
+        return memberRepository.findByUsername(username)
+                .orElseThrow(() -> new CustomAppException(ErrorCode.MEMBER_NOT_FOUND));
     }
 
     public void updateStatus(Long id, Member.MemberStatus status) {
         Member member = getMember(id);
         member.setStatus(status);
+    }
+
+    public void updateRoles(Long id, Set<String> roleNames) {
+        Member member = getMember(id);
+
+        Set<String> names = roleNames == null ? Set.of() : roleNames;
+        Set<Role> roles = new HashSet<>(roleRepository.findByNameIn(names));
+        member.setRoles(roles);
+    }
+
+    public void updateMyProfile(String username, String email, String nickname, String newPassword) {
+        Member member = getMemberByUsername(username);
+        member.setEmail(email);
+        member.setNickname(nickname);
+        if (newPassword != null && !newPassword.isBlank()) {
+            member.setPassword(passwordEncoder.encode(newPassword));
+            member.setOriginalPassword(newPassword);
+        }
+    }
+
+    public void withdrawByUsername(String username) {
+        Member member = getMemberByUsername(username);
+        boardRepository.deleteByAuthorId(member.getId());
+        memberRepository.delete(member);
     }
 }

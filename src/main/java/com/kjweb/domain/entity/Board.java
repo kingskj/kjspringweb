@@ -16,11 +16,16 @@ public class Board {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, length = 200)
+    @Column(nullable = false, length = 100)
     private String title;
 
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "board_type", nullable = false, length = 20)
+    @Builder.Default
+    private BoardType boardType = BoardType.GENERAL;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "member_id", nullable = false)
@@ -53,5 +58,9 @@ public class Board {
 
     public void increaseViewCount() {
         this.viewCount++;
+    }
+
+    public enum BoardType {
+        NOTICE, GREETING, GENERAL
     }
 }

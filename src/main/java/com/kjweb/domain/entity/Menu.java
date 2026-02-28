@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Entity
-@Table(name = "menus")
+@Table(name = "menus", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_menus_url", columnNames = "url")
+})
 @Getter @Setter
 @NoArgsConstructor
 @AllArgsConstructor
@@ -20,13 +22,13 @@ public class Menu {
     @Column(nullable = false, length = 50)
     private String name;
 
-    @Column(nullable = false, length = 200)
+    @Column(nullable = false, unique = true, length = 200)
     private String url;
 
-    @Column(name = "sort_order")
+    @Column(name = "sort_order", nullable = false)
     private Integer sortOrder;
 
-    @Column(name = "is_active")
+    @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = true;
 

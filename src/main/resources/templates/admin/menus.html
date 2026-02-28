@@ -11,11 +11,12 @@
                 <a href="/admin" class="list-group-item list-group-item-action">
                     <i class="bi bi-speedometer2"></i> 대시보드
                 </a>
-                <a href="/admin/members" class="list-group-item list-group-item-action">
-                    <i class="bi bi-people"></i> 회원관리
-                </a>
-                <a href="/admin/menus" class="list-group-item list-group-item-action active">
-                    <i class="bi bi-list-nested"></i> 메뉴관리
+                <a th:each="menuItem : ${adminSideMenus}"
+                   th:href="${menuItem.url}"
+                   class="list-group-item list-group-item-action"
+                   th:classappend="${adminCurrentPath == menuItem.url} ? ' active' : ''">
+                    <i class="bi bi-chevron-right"></i>
+                    <span th:text="${menuItem.name}"></span>
                 </a>
             </div>
         </div>
@@ -23,40 +24,58 @@
             <div th:replace="~{fragments/layout :: alerts}"></div>
             <h4><i class="bi bi-list-nested"></i> 메뉴관리</h4>
             <hr>
+
+            <div class="d-flex justify-content-end gap-2 mb-2">
+                <button type="button" id="addMenuRowBtn" class="btn btn-outline-primary btn-sm">
+                    <i class="bi bi-plus-lg"></i> 행 추가
+                </button>
+                <button type="button" id="saveMenuBatchBtn" class="btn btn-primary btn-sm">
+                    <i class="bi bi-save"></i> 일괄 저장
+                </button>
+            </div>
+
             <div class="card shadow-sm">
                 <table class="table table-hover mb-0">
                     <thead class="table-dark">
-                        <tr>
-                            <th>ID</th>
-                            <th>메뉴명</th>
-                            <th>URL</th>
-                            <th>순서</th>
-                            <th>상위메뉴</th>
-                            <th>상태</th>
-                            <th>관리</th>
-                        </tr>
+                    <tr>
+                        <th style="width: 7%">ID</th>
+                        <th style="width: 20%">메뉴명</th>
+                        <th style="width: 25%">URL</th>
+                        <th style="width: 10%">순서</th>
+                        <th style="width: 16%">상위메뉴</th>
+                        <th style="width: 8%">상태</th>
+                        <th style="width: 14%">관리</th>
+                    </tr>
                     </thead>
-                    <tbody>
-                        <tr th:each="menu : ${menus}">
-                            <td th:text="${menu.id}"></td>
-                            <td th:text="${menu.name}"></td>
-                            <td th:text="${menu.url}" class="small text-muted"></td>
-                            <td th:text="${menu.sortOrder}"></td>
-                            <td th:text="${menu.parent != null} ? ${menu.parent.name} : '-'" class="text-muted"></td>
-                            <td>
-                                <span class="badge"
-                                      th:classappend="${menu.isActive} ? 'bg-success' : 'bg-secondary'"
-                                      th:text="${menu.isActive} ? '활성' : '비활성'"></span>
-                            </td>
-                            <td>
-                                <form th:action="@{/admin/menus/{id}/toggle(id=${menu.id})}" method="post"
-                                      style="display: inline;">
-                                    <button type="submit" class="btn btn-sm"
-                                            th:classappend="${menu.isActive} ? 'btn-outline-warning' : 'btn-outline-success'"
-                                            th:text="${menu.isActive} ? '비활성화' : '활성화'"></button>
-                                </form>
-                            </td>
-                        </tr>
+                    <tbody id="menuTableBody">
+                    <tr th:each="menu : ${menus}"
+                        class="js-menu-row"
+                        th:attr="data-id=${menu.id}">
+                        <td class="align-middle menu-id" th:text="${menu.id}"></td>
+                        <td>
+                            <input type="text" class="form-control form-control-sm js-name" th:value="${menu.name}">
+                        </td>
+                        <td>
+                            <input type="text" class="form-control form-control-sm js-url" th:value="${menu.url}">
+                        </td>
+                        <td>
+                            <input type="number" min="1" step="1" class="form-control form-control-sm js-sort-order" th:value="${menu.sortOrder}">
+                        </td>
+                        <td class="align-middle">
+                            <select class="form-select form-select-sm js-parent-id">
+                                <option value="" th:selected="${menu.parent == null}">-</option>
+                                <option th:if="${adminMenuId != null}"
+                                        th:value="${adminMenuId}"
+                                        th:selected="${menu.parent != null and menu.parent.id == adminMenuId}">관리자</option>
+                            </select>
+                        </td>
+                        <td class="align-middle text-center">
+                            <input type="checkbox" class="form-check-input js-active" th:checked="${menu.isActive}">
+                        </td>
+                        <td class="align-middle">
+                            <button type="button" class="btn btn-sm btn-outline-danger js-delete-row">삭제</button>
+                        </td>
+                    </tr>
                     </tbody>
                 </table>
             </div>
@@ -66,5 +85,115 @@
 
 <footer th:replace="~{fragments/layout :: footer}"></footer>
 <th:block th:replace="~{fragments/layout :: scripts}"></th:block>
+<script th:inline="javascript">
+    const menuTableBody = document.getElementById('menuTableBody');
+    const addMenuRowBtn = document.getElementById('addMenuRowBtn');
+    const saveMenuBatchBtn = document.getElementById('saveMenuBatchBtn');
+    const deletedIds = new Set();
+    const adminMenuId = /*[[${adminMenuId}]]*/ null;
+
+    function parentSelectHtml() {
+        const adminOption = adminMenuId != null
+            ? `<option value="${adminMenuId}">관리자</option>`
+            : '';
+        return `<select class="form-select form-select-sm js-parent-id">
+            <option value="" selected>-</option>
+            ${adminOption}
+        </select>`;
+    }
+
+    function createMenuRow() {
+        const tr = document.createElement('tr');
+        tr.className = 'js-menu-row';
+        tr.dataset.id = '';
+        tr.innerHTML = `
+            <td class="align-middle menu-id">NEW</td>
+            <td><input type="text" class="form-control form-control-sm js-name"></td>
+            <td><input type="text" class="form-control form-control-sm js-url"></td>
+            <td><input type="number" min="1" step="1" class="form-control form-control-sm js-sort-order" value="1"></td>
+            <td class="align-middle">${parentSelectHtml()}</td>
+            <td class="align-middle text-center"><input type="checkbox" class="form-check-input js-active" checked></td>
+            <td class="align-middle"><button type="button" class="btn btn-sm btn-outline-danger js-delete-row">삭제</button></td>
+        `;
+        return tr;
+    }
+
+    addMenuRowBtn.addEventListener('click', function () {
+        menuTableBody.appendChild(createMenuRow());
+    });
+
+    menuTableBody.addEventListener('click', function (event) {
+        const deleteBtn = event.target.closest('.js-delete-row');
+        if (!deleteBtn) {
+            return;
+        }
+        const row = deleteBtn.closest('.js-menu-row');
+        if (!row) {
+            return;
+        }
+        const rowId = row.dataset.id;
+        if (rowId) {
+            deletedIds.add(Number(rowId));
+        }
+        row.remove();
+    });
+
+    menuTableBody.addEventListener('input', function (event) {
+        const sortInput = event.target.closest('.js-sort-order');
+        if (!sortInput) {
+            return;
+        }
+        const value = Number(sortInput.value);
+        if (!Number.isNaN(value) && value <= 0) {
+            sortInput.value = '1';
+        }
+    });
+
+    saveMenuBatchBtn.addEventListener('click', async function () {
+        const menus = [];
+        const rows = menuTableBody.querySelectorAll('.js-menu-row');
+
+        for (const row of rows) {
+            const idText = row.dataset.id;
+            const parentIdText = row.querySelector('.js-parent-id')?.value ?? '';
+            const name = row.querySelector('.js-name')?.value?.trim() || '';
+            const url = row.querySelector('.js-url')?.value?.trim() || '';
+            const sortOrderText = row.querySelector('.js-sort-order')?.value ?? '';
+            const active = row.querySelector('.js-active')?.checked === true;
+            const parsedSortOrder = sortOrderText === '' ? null : Number(sortOrderText);
+            const sortOrder = parsedSortOrder == null || Number.isNaN(parsedSortOrder)
+                ? null
+                : (parsedSortOrder <= 0 ? 1 : parsedSortOrder);
+
+            menus.push({
+                id: idText ? Number(idText) : null,
+                name: name,
+                url: url,
+                sortOrder: Number.isNaN(sortOrder) ? null : sortOrder,
+                isActive: active,
+                parentId: parentIdText ? Number(parentIdText) : null,
+                deleted: false
+            });
+        }
+
+        deletedIds.forEach((id) => {
+            menus.push({
+                id: id,
+                deleted: true
+            });
+        });
+
+        const ok = await window.kjApi('/api/admin/menus/batch', {
+            method: 'PUT',
+            body: JSON.stringify({menus: menus})
+        }, window.location.href);
+
+        if (!ok) {
+            return;
+        }
+
+        deletedIds.clear();
+    });
+</script>
 </body>
 </html>
