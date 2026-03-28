@@ -1,0 +1,48 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.2.1'
+}
+
+group = 'com.turtlepick'
+version = '0.1.0-SNAPSHOT'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    if (JavaVersion.current().isJava9Compatible()) {
+        options.release = 8
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.ow2.asm:asm:9.9.1'
+    implementation 'org.ow2.asm:asm-commons:9.9.1'
+}
+
+jar {
+    enabled = false
+}
+
+shadowJar {
+    archiveBaseName = 'turtlepick-agent-core'
+    archiveClassifier = ''
+    relocate 'org.objectweb.asm', 'com.turtlepick.agent.shaded.asm'
+
+    manifest {
+        attributes(
+            'Premain-Class': 'com.turtlepick.agent.core.AgentPremain',
+            'Can-Redefine-Classes': 'false',
+            'Can-Retransform-Classes': 'false',
+            'Implementation-Title': 'turtlepick-agent-core',
+            'Implementation-Version': project.version
+        )
+    }
+}

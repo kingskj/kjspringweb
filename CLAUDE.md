@@ -123,32 +123,108 @@ kjspringweb/
 
 ---
 
-## 11. 현재 상태 (2026-02-28)
+## 11. 현재 상태 (2026-03-28)
 
 - GCP 배포 상태로 동작 확인
 - 배치 트랜잭션 롤백 정상 확인 (짝수일 삭제 배치 FAILED → 삭제 롤백 정상)
-- TurtlePick Agent 미연결 (Agent/Engine 미개발)
+- TurtlePick Agent 개발 착수 (2026-03-28~)
+- TurtlePick Engine 로컬 기동 확인 (localhost:8081, health UP)
 
 ---
 
-## 12. 다음 과제
+## 12. Server Agent 설계 확정 (2026-03-28)
 
-1. **IntelliJ 전환** — VSCode에서 IntelliJ로 개발 환경 이전
-2. **TurtlePick Server Agent 개발** — Spring AOP + MyBatis Interceptor 기반 Agent 붙이기
-3. Agent 붙인 후 TurtlePick Engine과 연동 테스트
+### server-agent 모듈 방향
+- Spring Boot starter auto-configuration 모듈
+- turtlepick 멀티모듈 내 독립 모듈로 신설
+- kjspringweb에 의존성 추가만으로 부착 (소스 무간섭)
+
+### 첫 단위 구현 범위 (meta 핸드셰이크)
+- `GitCommitHashProvider` — `git -C {repoRoot} rev-parse HEAD`, full 40자 hex 검증
+- `EngineMetaClient` — JDK HttpClient, `POST /api/agent/meta`
+- `AgentStateHolder` — `AtomicReference<AgentState>`, `LOG_ON`/`LOG_OFF` 2상태
+- `MethodMappingRegistry` — method 매핑 메모리 적재
+- `AgentBootstrapService` — hash 확보 → meta → state 결정
+- `AgentStartupListener` — `ApplicationReadyEvent` 1회 호출
+
+### 이번 단위 제외
+- `/agent/resume` endpoint
+- AOP 계측, SQL 계측, 로그 파일 생성/롤링, log-ready
+
+### 고정 정책 (코드 고정, config 제어 불가)
+- 엔진 무응답/실패 → 무조건 `LOG_OFF`
+- 파일명 패턴: `{server_id}_{yyyyMMdd}_{HHmmss}.ndjson`
+
+### config 파일 구조 (`kjspringweb/turtlepick.yml`)
+```yaml
+turtlepick:
+  engine:
+    base-url: http://localhost:8081
+    meta:
+      timeout-ms: 3000
+  agent:
+    server-id: kjspringweb-local
+    app-name: kjspringweb
+    git:
+      repo-root: .        # optional, 미설정 시 user.dir
+    logging:
+      dir: ./turtlepick-logs
+      rolling:
+        interval-minutes: 5
+    instrumentation:
+      http: true
+      service: true
+      sql:
+        datasource-proxy: true
+        mybatis-interceptor: false
+```
+
+### Properties 클래스
+- `TurtlepickEngineProperties` (prefix: `turtlepick.engine`)
+- `TurtlepickAgentProperties` (prefix: `turtlepick.agent`)
 
 ---
 
-## 13. 관련 프로젝트
+## 13. 다음 과제
+
+1. **starter auto-configuration 내부 구조** — 진행 중
+2. Agent 붙인 후 TurtlePick Engine(localhost:8081)과 연동 테스트
+
+---
+
+## 14. TurtlePick Engine 연동 정보 (2026-03-28)
+
+- 엔진 주소: `http://localhost:8081`
+- meta 엔드포인트: `POST /api/agent/meta`
+- log-ready 엔드포인트: `POST /api/agent/log-ready`
+- resume 수신 엔드포인트 (대상서버): `POST /agent/resume`
+- 대상서버 serverId: `kjspringweb-local`
+- 현재 인덱싱된 최신 커밋: `586234a0a0ebbe8819d28805b32ee1c826c8e23f`
+
+### ⚠️ 엔진 기지 버그 (2026-03-28 발견, 미수정)
+- meta 요청 시 short hash(`586234a`) 전달 → 엔진 DB는 full hash 저장 → `COMMIT_NOT_INDEXED` 반환
+- 엔진 DB에 테스트용 더미 row `meta-incomplete-case` (seq=999999) 잔존
+- → **Agent 구현 시 meta 요청에 full commit hash 전달해야 함**
+
+---
+
+## 14. 관련 프로젝트
 
 | 프로젝트 | 역할 |
 |----------|------|
 | kjspringweb (이 레포) | TurtlePick 대상 서버 |
-| TurtlePick | 비즉시성 모니터링 엔진 (미개발, 설계 단계) |
+| TurtlePick | 비즉시성 모니터링 엔진 (로컬 기동 중) |
 | kjmacro2 | Diablo2 Vision RPA 엔진 (별개 프로젝트) |
 
 ---
 
-## 14. 작업 프로토콜
+## 15. 작업 규칙 (2026-03-28)
+
+- CLAUDE.md 수정: Claude 자율 허용
+- 나머지 파일 수정: 금지 (오빠 명시적 지시 시에만)
+- Claude 역할: GPT 제안 딴지/보완안 채팅 제시만
+- 코드 수정 실행: GPT(Codex) 담당
+
+## 16. 작업 프로토콜
 
 `work_protocol.md` 참고 (GPT + Claude 핑퐁 방식 동일 적용)
