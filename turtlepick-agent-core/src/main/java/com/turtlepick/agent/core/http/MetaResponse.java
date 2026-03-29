@@ -11,8 +11,15 @@ public final class MetaResponse {
     private final String agentId;
     private final String commitHash;
     private final List<MethodMapping> methods;
+    private final List<EndpointInfo> endpoints;
 
-    public MetaResponse(String status, String reason, String agentId, String commitHash, List<MethodMapping> methods) {
+    public MetaResponse(
+            String status,
+            String reason,
+            String agentId,
+            String commitHash,
+            List<MethodMapping> methods,
+            List<EndpointInfo> endpoints) {
         this.status = status;
         this.reason = reason;
         this.agentId = agentId;
@@ -22,10 +29,22 @@ public final class MetaResponse {
         } else {
             this.methods = Collections.unmodifiableList(new ArrayList<MethodMapping>(methods));
         }
+        if (endpoints == null) {
+            this.endpoints = Collections.emptyList();
+        } else {
+            this.endpoints = Collections.unmodifiableList(new ArrayList<EndpointInfo>(endpoints));
+        }
     }
 
     public static MetaResponse logOff(String reason) {
-        return new MetaResponse("LOG_OFF", reason, null, null, Collections.<MethodMapping>emptyList());
+        return new MetaResponse(
+                "LOG_OFF",
+                reason,
+                null,
+                null,
+                Collections.<MethodMapping>emptyList(),
+                Collections.<EndpointInfo>emptyList()
+        );
     }
 
     public boolean isOk() {
@@ -50,5 +69,9 @@ public final class MetaResponse {
 
     public List<MethodMapping> getMethods() {
         return methods;
+    }
+
+    public List<EndpointInfo> getEndpoints() {
+        return endpoints;
     }
 }

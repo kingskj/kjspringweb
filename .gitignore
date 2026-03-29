@@ -35,3 +35,8 @@ out/
 
 ### VS Code ###
 .vscode/
+
+logs/
+turtlepick-logs/
+*.out.log
+*.err.log

@@ -72,11 +72,11 @@
 1. 작업 중 정책/구조/운영값이 바뀌면 이 파일을 우선 갱신한다.
 2. 일지는 이력 기록용이고, 현재 맥락의 최종 기준은 항상 `gpt.md`다.
 3. 사용자 최신 지시가 충돌하면 최신 지시를 우선한다.
-4. 최신 사용자 지시(2026-03-02): `gpt.md`를 제외한 파일은 사용자의 명시 지시 없이는 수정하지 않는다.
-5. 최신 사용자 지시(2026-03-02): 딴지/제안/코드 수정안은 파일 직접 수정이 아니라 채팅으로만 제시한다.
-6. 최신 사용자 지시(2026-03-28): `gpt.md`만 맥락 유지 목적의 자율 수정 허용, 그 외 모든 파일 수정은 사용자의 직접 지시 전까지 금지한다.
-7. 최신 사용자 지시(2026-03-28): TurtlePick 대상 서버 agent 개발은 즉시 착수하되, Codex 역할은 Claude 제안에 대한 딴지/보완안 제시와 설계 검토에 한정한다.
-8. 최신 사용자 지시(2026-03-28): 코드 수정 허용 트리거는 단위 제안별 사용자의 명시 문구 `확정. 반영`일 때만 성립한다.
+4. 최신 사용자 지시(2026-03-29): `gpt.md`를 제외한 모든 파일은 사용자의 직접적 명시 지시 전까지 수정 금지다.
+5. 최신 사용자 지시(2026-03-29): `gpt.md`는 사용자의 별도 요청이 없어도 맥락 유지 목적의 자율 수정이 허용된다.
+6. 최신 사용자 지시(2026-03-29): 딴지/제안/코드 수정안은 `확정. 반영.` 지시 전까지 파일 직접 수정이 아니라 채팅으로만 제시한다.
+7. 최신 사용자 지시(2026-03-29): 실제 파일 수정/반영 허용 트리거는 사용자의 명시 문구 `확정. 반영.`일 때만 성립한다.
+8. 최신 사용자 지시(2026-03-29): `확정. 반영.` 후에는 반영 요약, 반영된 파일 목록, 테스트 후 테스트 결과 요약을 항상 출력한다.
 
 ## 6) 2026-03-02 코드베이스 분석 메모
 - 현재 구조: Spring Boot 4 + Thymeleaf + Security + JPA(H2) + Spring Batch 조합.
@@ -593,3 +593,206 @@
   - 7섹터 + 8~9섹터까지 묶으면: 8~14시간
   - 레거시/호환성 이슈(Java 8, Boot 차이, 요청 외 진입점, 파일 I/O 엣지케이스)까지 붙으면: 12~20시간도 가능
 - 현재 가장 시간이 갈 구간은 기능 구현보다 endpoint 귀속 규칙과 파일 상태 전이(safe close/rolling/log-ready 타이밍) 검증이다.
+
+## 63) 2026-03-29 TurtlePick/대상서버 재분석 메모
+- 이번 세션에서 확인한 참조 범위:
+  - `D:\workspace\turtlepick\README.md`, `gpt.md`, `CLAUDE.md`, `work_protocol.md`, `docs/*`
+  - 현재 저장소 `gpt.md`, `CLAUDE.md`, `work_protocol.md`, `docs/*`
+- `turtlepick` 실제 루트 구조는 여전히 `engine-app`, `engine-core-private` 2모듈이며, 문서 초기에 반복되던 별도 `server-agent` 모듈은 현재 저장소에 없다.
+- 현재 대상서버 쪽 실제 agent 코드는 `D:\workspace\kjspringweb\turtlepick-agent-core`에 들어와 있고, 상태는 1~6섹터 완료 수준이다.
+  - `AgentPremain` + `MethodProbeIndex` + ASM transformer까지 반영돼 있다.
+  - smoke test 로그 파일들이 현재 저장소 루트에 남아 있다.
+- 엔진 쪽 `/api/agent/meta`는 현재 코드 기준 `methods[] + endpoints[]`를 반환한다.
+  - `D:\workspace\turtlepick\engine-app\src\main\java\com\turtlepick\contract\AgentMetaResponse.java`
+  - `D:\workspace\turtlepick\engine-app\src\main\java\com\turtlepick\adapter\AgentAdapter.java`
+- 반면 현재 대상서버 agent consumer는 아직 `methods[]`만 파싱한다.
+  - `turtlepick-agent-core/http/MetaResponse.java`
+  - `turtlepick-agent-core/http/MetaJsonCodec.java`
+  - 즉 엔진 계약 보강은 완료됐지만, 서버 agent 7섹터 진입에 필요한 `endpoints[]` 수용은 아직 로컬 agent에 미반영 상태다.
+- 엔진의 `log-ready` 수신 골격은 구현돼 있지만 실제 파일 I/O는 아직 stub 단계다.
+  - `LogReadyService.checkSourceFileExistsStub`
+  - `LogFileProcessor.readLogFileStub/storeDailyTempStub/deleteSourceFileStub`
+- 현재 `kjspringweb` 실제 HTTP 진입점은 컨트롤러 선언 기준 24개다.
+  - 여기에 Spring Security 처리 경로 `POST /auth/login`, `POST /auth/logout`까지 포함하면 관측 관점 entry point 수는 달라질 수 있다.
+  - 일부 외부 문서의 `25개` 표기는 이 프레임워크 처리 경로 포함 가능성을 염두에 두고 해석해야 한다.
+- `MemberController` 실제 기본 경로는 여전히 `/member`이며, 구식 문서의 `/profile`, `/withdraw` 단독 표기는 stale이다.
+- 예외 처리 구조는 현재도 이원화다.
+  - MVC: `GlobalExceptionHandler`에서 referer redirect + flash 에러
+  - REST: `ApiExceptionHandler`에서 JSON + HTTP status
+  - 따라서 TurtlePick 로그/에러 귀속은 최종 응답 형태뿐 아니라 발생 예외와 진입 타입을 함께 봐야 한다.
+- 로컬 설정 기준:
+  - 대상서버 agent 설정은 `turtlepick.properties`
+  - 엔진 설정은 `D:\workspace\turtlepick\config.yml`
+  - 엔진 `monitoring-branches`에 `develop`, `work`가 포함돼 있어, 문서대로 현재 원격 부재 경고가 반복될 가능성이 높다.
+- 이번 턴은 사용자 지시상 분석 전용으로 처리했고, 실제 파일 수정은 맥락 유지 목적의 `gpt.md` 갱신만 수행했다.
+
+## 64) 2026-03-29 루트 로그 정리 분석 메모
+- 현재 저장소 루트의 지저분한 로그 파일:
+  - `bootrun.out.log`, `bootrun.err.log`
+  - `agent-java.out.log`, `agent-java.err.log`
+  - `agent-smoke.out.log`, `agent-smoke.err.log`
+  - `agent6-java.out.log`, `agent6-java.err.log`
+- 확인 결과 이는 Spring Boot `logging.file.*` 산출물이 아니라, 수동 실행 검증 과정에서 stdout/stderr를 루트 파일로 리다이렉션해 남긴 운영/실험 로그 성격이다.
+  - 현재 `src/main/resources/application.yml`에는 파일 로그 경로 설정이 없고 `logging.level`만 있다.
+  - `turtlepick.properties`의 `turtlepick.agent.logging.dir=./turtlepick-logs`는 향후 agent 자체 로그 파일 경로용이지만, 현재 7섹터 이전이라 루트 clutter 원인은 아니다.
+- 따라서 정리 방향은 애플리케이션 로깅 정책 수정 이전에 "수동 실행 산출물 경로 표준화"가 우선이다.
+  - 제안 최소안:
+    - 루트 외부가 아니라 프로젝트 내부 `logs/yyyyMMdd/` 또는 `logs/manual/` 하위로 stdout/stderr 파일을 모은다.
+    - `.gitignore`에 `*.out.log`, `*.err.log`, `logs/`, `turtlepick-logs/`를 추가한다.
+    - 반복 실행 명령은 PowerShell 스크립트 또는 고정 명령 템플릿으로 묶어 루트 직접 redirection을 금지한다.
+- 사용자의 최신 명시 트리거(`확정. 반영`) 전까지는 실제 파일 이동/삭제/설정 반영은 수행하지 않는다.
+
+## 65) 2026-03-29 서버 자체 로그 정비 반영 메모
+- 사용자 `확정. 반영.` 지시에 따라 서버 자체 로그 정비를 실제 반영했다.
+- 반영 방향:
+  - 콘솔 로그는 로컬 확인 편의를 위해 `INFO` 기준으로 넓게 유지
+  - 파일 로그는 운영 서버용으로 `ERROR`만 적재
+  - 로그 경로는 상대 `logs/` 하드코딩 대신 `LOG_PATH` 환경변수/프로퍼티 기본값 `${LOG_PATH:logs}`로 외부화
+  - 에러 파일은 현재 파일 `logs/kjspringweb-error.log`, 롤링 파일 `logs/yyyyMMdd/kjspringweb-error.yyyymmdd.i.log.gz`
+- 실제 반영 파일:
+  - `src/main/resources/logback-spring.xml`
+  - `src/main/resources/application.yml`
+  - `.gitignore`
+- 세부 정책:
+  - `root=INFO`
+  - `org.springframework.batch=INFO` 명시 유지
+  - `org.springframework.security=WARN` 유지
+  - Git 반영 제외: `logs/`, `turtlepick-logs/`, `*.out.log`, `*.err.log`
+- 검증 결과:
+  - `.\gradlew.bat bootJar` 성공
+  - `.\gradlew.bat test` 실패
+  - 실패 원인은 로깅 설정이 아니라 기존 기본 템플릿 테스트 `src/test/java/com/example/demo/DemoApplicationTests.java`의 패키지/설정 불일치다.
+  - 실패 메시지 핵심: `Unable to find a @SpringBootConfiguration by searching packages upwards from the test`
+- 후속 보정:
+  - 최초 반영안의 `fileNamePattern`은 `%d{yyyyMMdd}`를 2회 사용해 `SizeAndTimeBasedRollingPolicy` 기동 오류 후보가 있었다.
+  - 사용자 확정에 따라 B안으로 보정: 날짜 폴더를 제거하고 파일명에만 날짜를 포함한다.
+  - 최종 패턴: `${APP_LOG_PATH}/${APP_NAME}-error.%d{yyyyMMdd}.%i.log.gz`
+  - `bootJar` 재검증 성공
+  - `java -jar ... --spring.datasource.url=jdbc:h2:mem:testdb --server.port=0` 기동 검증에서도 logback 파싱 오류 없이 정상 시작 확인
+
+## 66) 2026-03-29 agent 7-1 endpoints 귀속 실구현안 메모
+- 사용자 최신 합의 기준으로 agent 7-1의 첫 반영 범위는 `endpoints[] 수용 + HTTP context 적재 + root method endpoint 귀속`까지다.
+- 1차 범위에서 제외:
+  - trace 파일 기록/롤링
+  - engine `log-ready` 호출
+  - `*`, `**`, regex 기반 URI matcher
+- 확정 구현 규칙:
+  - `MetaResponse`는 기존 `methods[]` 외에 `endpoints[]`를 함께 수용한다.
+  - endpoint registry는 `entryMethodId -> List<EndpointInfo>`만 유지한다. `byEndpointId` 맵은 7-1 범위에서 사용처가 없어 넣지 않는다.
+  - HTTP 귀속은 `DispatcherServlet#doDispatch` instrumentation으로 `HttpRequestContextHolder`에 `httpMethod`, `requestUri`를 적재하는 방식으로 간다.
+  - `HttpServletRequest`에 대한 agent compile dependency는 두지 않고 bridge에서 `Object` + reflection으로 `getMethod()`, `getRequestURI()`, `getContextPath()`를 호출한다.
+  - HTTP context clear는 반드시 `try/finally`로 보장한다. Tomcat thread reuse 때문에 `finally` 누락은 오귀속 위험이 크다.
+  - `javax.servlet` / `jakarta.servlet` descriptor는 둘 다 검사하되, 실제 매칭되는 `DispatcherServlet#doDispatch` 하나만 instrument한다.
+- 1차 URI matcher 규칙:
+  - `entryKey`와 `requestUri` 모두 leading slash 보정, duplicate slash 제거, trailing slash 제거 후 비교
+  - `requestUri`는 `contextPath` 제거 후 정규화
+  - segment 개수 exact match만 허용
+  - literal segment는 exact match
+  - `{...}` segment는 single-segment wildcard
+  - 범위를 벗어나거나 애매하면 과감히 `unresolved + WARN` 처리
+- 구현 우선순위:
+  1. `MetaResponse` / `MetaJsonCodec` endpoints 파싱
+  2. `EndpointRegistry`, `EndpointResolver`, `ResolvedEndpoint`
+  3. `HttpRequestContextHolder`, `HttpRequestContextBridge`
+  4. `DispatcherServlet` transformer
+  5. `RuntimeTraceContext` / `RuntimeMethodBridge` root attach 확장
+
+## 67) 2026-03-29 agent 7-1 구현안 보정 메모
+- `EndpointRegistry.replaceAll()`의 내부 맵은 키 조회용이라 `LinkedHashMap`이 아니라 `HashMap`을 사용한다.
+- `HttpRequestContextBridge.enter(Object request)`는 fail-open 원칙을 따른다.
+  - reflection 실패, null 요청, 예상 외 runtime 예외가 나와도 절대 요청 처리 흐름으로 전파하지 않는다.
+  - 내부에서 예외를 삼키고 `AgentLog.warn(...)`만 남긴 뒤 `HttpRequestContextHolder.clear()` 또는 no-op 처리한다.
+- 동일 원칙으로 `HttpRequestContextBridge.exit()`도 예외를 전파하지 않는다.
+- fatal 재전파는 `throw t`가 아니라 `throw (Error) t` 형태로 고정한다.
+  - `catch (Throwable t)` 안에서 `throw t`를 쓰면 checked exception 가능성 때문에 `throws Throwable` 선언이 필요할 수 있다.
+  - `isFatal(t)` 대상은 `VirtualMachineError` / `ThreadDeath` 계열만 보므로 `Error` 캐스팅 재전파가 의도와 컴파일 양쪽에서 더 안전하다.
+- `DispatcherServlet` instrumentation의 try/finally 삽입 코드는 `DispatcherServletDoDispatchAdapter.visitCode()`에서 시작 label / try-catch block / bridge enter 호출을 배치하고, `visitMaxs()`에서 catch handler + `exit()` + `ATHROW`를 마감하는 방식으로 구현하는 쪽이 안전하다.
+- 핵심 보장:
+  - bridge 예외가 운영 요청 500으로 이어지지 않는다.
+  - `finally` clear는 정상/예외 경로 모두에서 보장된다.
+
+## 68) 2026-03-29 agent 7-1 endpoints 귀속 1차 반영 메모
+- 사용자 `확정. 반영` 지시에 따라 agent 7-1의 1차 구현을 실제 반영했다.
+- 실제 반영 범위:
+  - `MetaResponse` / `MetaJsonCodec`에 `endpoints[]` 수용 추가
+  - `EndpointInfo`, `EndpointRegistry`, `EndpointResolver`, `ResolvedEndpoint` 신규 추가
+  - `HttpRequestContext`, `HttpRequestContextHolder`, `HttpRequestContextBridge` 신규 추가
+  - `DispatcherServlet` 대상 HTTP transformer 신규 추가
+  - `RuntimeTraceContext`, `RuntimeMethodBridge`에 root endpoint attach 확장
+  - `AgentBootstrapService`, `BootstrapResult`, `AgentPremain`에 endpoint bootstrap / 로그 추가
+- 구현 세부:
+  - endpoint registry는 `entryMethodId -> List<EndpointInfo>`만 유지
+  - URI matcher는 세그먼트 exact count + literal exact match + `{...}` wildcard 1단계 규칙만 지원
+  - HTTP context bridge는 fail-open으로 동작하며 reflection 실패를 요청 500으로 전파하지 않는다
+  - `DispatcherServlet#doDispatch`는 `javax` / `jakarta` descriptor 둘 다 검사하고, `safeEnter` + `safeExit` + catch-all clear 구조로 instrument한다
+- 검증 결과:
+  - `turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공
+  - 루트 `.\gradlew.bat bootJar` 성공
+  - 임시 Java smoke로 `MetaJsonCodec.decodeMetaResponse()` + `EndpointResolver.resolve()` 검증 성공
+    - `codec-ok methods=1 endpoints=1 endpointId=2001 status=RESOLVED`
+  - agent 부착 서버 smoke:
+    - 임시 ASCII 설정으로 agent attach 후 `/` 요청 200 확인
+    - mock HTTP listener는 현재 PowerShell background 제약 때문에 안정적으로 재현되지 않아, attach smoke에서는 engine 미연결 시 `meta log_off ... HTTP_ERROR:ConnectException` fail-open 경로만 확인
+  - 루트 `.\gradlew.bat test`는 기존 `DemoApplicationTests` 설정 불일치로 계속 실패
+
+## 69) 2026-03-29 agent 7-2 trace file writer 구현안 리뷰 메모
+- 7-2 방향 자체는 맞다. 현재 `RuntimeMethodBridge.exit()` root exit에서 `RuntimeTraceContext`가 그냥 버려지고 있어 파일 기록 단계가 필요하다.
+- 다만 구현 전 보정 포인트:
+  - root flush 구간은 `TraceContextHolder.clear()`를 반드시 `finally`에서 보장해야 한다.
+    - `TraceLogSerializer.serialize(...)` 또는 예상 밖 runtime 예외가 나면 현재 스레드의 trace context가 남아 stale 상태가 될 수 있다.
+  - `TraceLogWriter.install(...)` 위치는 `AgentBootstrapService`보다 `AgentPremain` 쪽이 더 자연스럽다.
+    - 현재 `RuntimeMethodBridge.installEndpointResolver(...)`도 `AgentPremain` 성공 경로에 있고, singleton runtime wiring을 bootstrap service 내부로 섞지 않는 편이 구조상 깔끔하다.
+  - serializer JSON 필드명은 `entryKey` vs `endpointEntryKey` 중 하나로 확정해야 한다.
+    - 현재 `RuntimeTraceContext` 필드/게터는 `endpointEntryKey` 축으로 되어 있어 serializer 출력 키도 이에 맞추는 편이 일관적이다.
+
+## 70) 2026-03-29 agent 7-2 trace file writer 반영 메모
+- 사용자 `확정. 반영` 지시에 따라 7-2를 실제 반영했다.
+- 실제 반영 범위:
+  - `TraceLogSerializer` 신규 추가
+  - `TraceLogWriter` 신규 추가
+  - `RuntimeMethodBridge.exit()` root exit에서 serialize -> write -> finally clear 추가
+  - `AgentPremain` 성공 경로에 `TraceLogWriter.install(config.getLoggingDir(), config.getRollingIntervalMinutes())` 추가
+- 구현 정책:
+  - JSON 키는 `endpointEntryType`, `endpointEntryKey`, `endpointHttpMethod`, `endpointResolutionStatus` 기준으로 고정
+  - serializer는 JDK-only 수동 JSON 조립, null 값은 필드 생략 없이 JSON `null`
+  - writer는 `trace-{yyyyMMddHHmm}.log` 파일명, slot 기반 롤링, `synchronized` 보호
+  - writer/flush 예외는 `AgentLog.warn(...)`만 남기고 삼킴
+  - root flush는 `finally`에서 `TraceContextHolder.clear()`를 보장한다
+- 검증 결과:
+  - `turtlepick-agent-core` `..\gradlew.bat shadowJar` 성공
+  - 루트 `.\gradlew.bat bootJar` 성공
+  - 임시 Java smoke로 serializer + writer 검증 성공
+    - `trace-202603291628.log`
+    - JSON line에 `entryMethodId`, `timestampMs` 정상 포함 확인
+  - 임시 Java smoke로 `RuntimeMethodBridge.enter/exit` root flush 경로 검증 성공
+    - `trace-202603291630.log`
+    - JSON line에 `entryMethodId=321`, `entryFqcnMethod=com.example.HomeController#home()` 기록 확인
+  - 루트 `.\gradlew.bat test`는 기존 `DemoApplicationTests` 설정 불일치로 계속 실패
+
+## 71) 2026-03-29 실엔진 연동 검증 메모
+- 엔진 `http://localhost:8081/api/agent/meta` 실응답은 확인했다.
+- 현재 저장소 HEAD `c50fe31e69440d2268ab700ef739eabd860c199f`로 직접 meta 요청 시 응답:
+  - HTTP 200
+  - `{"status":"LOG_OFF","reason":"COMMIT_NOT_INDEXED", ... }`
+- 실제 agent 부착 서버 smoke도 수행했다.
+  - `java -javaagent:turtlepick-agent-core-0.1.0-SNAPSHOT.jar -jar build/libs/kjspringweb-0.0.1-SNAPSHOT.jar --server.port=18082 ...`
+  - `/` 요청 200 확인
+  - agent stderr 로그에 `config loaded ...` 후 `meta log_off ... reason=COMMIT_NOT_INDEXED` 확인
+- 결론:
+  - 실엔진 네트워크 연동 및 fail-open 경로는 확인됨
+  - 하지만 엔진이 현재 커밋을 아직 인덱싱하지 않아 `status=OK + methods[] + endpoints[]` 경로의 실엔진 end-to-end 검증은 아직 못 했다
+  - 따라서 trace 파일 실엔진 양성 검증은 커밋 인덱싱 후 재실행 필요
+
+## 72) 2026-03-29 turtlepick engine bootRun 실패 원인 메모
+- 사용자가 `work`를 `main`에 병합한 뒤 `:engine-app:bootRun` 실패를 보고했고, 실제 `--stacktrace` 실행으로 원인을 확인했다.
+- 실제 실패 원인:
+  - `ConfigurationPropertiesBindException`
+  - `database.url` 바인딩 값이 `null`
+  - `DatabaseProperties` 검증에서 `공백일 수 없습니다`
+- 직접 원인:
+  - 현재 [application.yml](d:/workspace/turtlepick/engine-app/src/main/resources/application.yml) 의 `spring.config.import`가 `optional:file:./config.yml`만 가리킨다.
+  - 실제 설정 파일은 [config.yml](d:/workspace/turtlepick/config.yml)에 있고, `bootRun` 작업 디렉터리는 `D:\workspace\turtlepick\engine-app`라서 `./config.yml`이 비어버린다.
+  - 그래서 `database.url`, profile 등 외부 설정이 로드되지 않고 기본 profile + null datasource 설정으로 기동하다가 죽는다.
+- 참고:
+  - 이전 세션에서 읽었던 engine `application.yml`에는 `optional:file:../config.yml` 경로가 함께 있었고, 그때는 루트 `config.yml`을 정상 인식했던 정황이 있다.
+  - 즉 이번 failure는 git sync/branch 문제 이전에 `config import path`가 루트 `config.yml`을 못 보게 된 설정 회귀로 보는 게 맞다.

@@ -33,8 +33,9 @@ public final class MetaJsonCodec {
         String agentId = readNullableStringField(json, "agentId", start, end);
         String commitHash = readNullableStringField(json, "commitHash", start, end);
         List<MethodMapping> methods = readMethods(json, start, end);
+        List<EndpointInfo> endpoints = readEndpoints(json, start, end);
 
-        return new MetaResponse(status, reason, agentId, commitHash, methods);
+        return new MetaResponse(status, reason, agentId, commitHash, methods, endpoints);
     }
 
     private List<MethodMapping> readMethods(String json, int startIndex, int endIndex) {
@@ -79,6 +80,65 @@ public final class MetaJsonCodec {
         }
 
         return new MethodMapping(methodId.intValue(), fqcnMethod);
+    }
+
+    private List<EndpointInfo> readEndpoints(String json, int startIndex, int endIndex) {
+        int valueStart = findFieldValueStart(json, "endpoints", startIndex, endIndex);
+        if (valueStart < 0) {
+            return new ArrayList<EndpointInfo>();
+        }
+        if (json.charAt(valueStart) != '[') {
+            throw new IllegalArgumentException("endpoints field is not an array");
+        }
+
+        int arrayEnd = findMatchingBracket(json, valueStart, endIndex, '[', ']');
+        List<EndpointInfo> result = new ArrayList<EndpointInfo>();
+
+        int index = valueStart + 1;
+        while (index < arrayEnd) {
+            index = skipWhitespaceAndComma(json, index, arrayEnd);
+            if (index >= arrayEnd) {
+                break;
+            }
+            if (json.charAt(index) != '{') {
+                throw new IllegalArgumentException("endpoints array must contain objects");
+            }
+
+            int objectEnd = findMatchingBracket(json, index, arrayEnd, '{', '}');
+            result.add(parseEndpointObject(json, index, objectEnd + 1));
+            index = objectEnd + 1;
+        }
+
+        return result;
+    }
+
+    private EndpointInfo parseEndpointObject(String json, int startIndex, int endIndex) {
+        Integer endpointId = readIntField(json, "endpointId", startIndex, endIndex);
+        String entryType = readNullableStringField(json, "entryType", startIndex, endIndex);
+        String entryKey = readNullableStringField(json, "entryKey", startIndex, endIndex);
+        String httpMethod = readNullableStringField(json, "httpMethod", startIndex, endIndex);
+        Integer entryMethodId = readIntField(json, "entryMethodId", startIndex, endIndex);
+
+        if (endpointId == null || endpointId.intValue() <= 0) {
+            throw new IllegalArgumentException("endpointId must be positive");
+        }
+        if (entryMethodId == null || entryMethodId.intValue() <= 0) {
+            throw new IllegalArgumentException("entryMethodId must be positive");
+        }
+        if (entryType == null || entryType.trim().length() == 0) {
+            throw new IllegalArgumentException("entryType is required");
+        }
+        if (entryKey == null || entryKey.trim().length() == 0) {
+            throw new IllegalArgumentException("entryKey is required");
+        }
+
+        return new EndpointInfo(
+                endpointId.intValue(),
+                entryType,
+                entryKey,
+                httpMethod,
+                entryMethodId.intValue()
+        );
     }
 
     private String readNullableStringField(String json, String fieldName, int startIndex, int endIndex) {

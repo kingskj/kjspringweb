@@ -1,15 +1,33 @@
 package com.turtlepick.agent.core.trace;
 
+import com.turtlepick.agent.core.state.EndpointResolver;
+import com.turtlepick.agent.core.state.ResolvedEndpoint;
 import com.turtlepick.agent.core.util.AgentLog;
 
 public final class RuntimeMethodBridge {
 
+    private static volatile EndpointResolver endpointResolver;
+
     private RuntimeMethodBridge() {
+    }
+
+    public static void installEndpointResolver(EndpointResolver resolver) {
+        endpointResolver = resolver;
     }
 
     public static void enter(int methodId, String fqcnMethod) {
         RuntimeTraceContext context = TraceContextHolder.getOrCreate();
+        boolean root = context.isEmpty();
         context.push(methodId, fqcnMethod);
+
+        if (root) {
+            EndpointResolver resolver = endpointResolver;
+            if (resolver != null) {
+                HttpRequestContext httpRequestContext = HttpRequestContextHolder.get();
+                ResolvedEndpoint resolvedEndpoint = resolver.resolve(methodId, httpRequestContext);
+                context.attachResolvedEndpoint(resolvedEndpoint, httpRequestContext);
+            }
+        }
     }
 
     public static void exit(int methodId, boolean error) {
@@ -34,7 +52,16 @@ public final class RuntimeMethodBridge {
         context.pop();
 
         if (context.isEmpty()) {
-            TraceContextHolder.clear();
+            try {
+                long now = System.currentTimeMillis();
+                String line = TraceLogSerializer.serialize(context, now);
+                TraceLogWriter.write(line);
+            } catch (Throwable t) {
+                AgentLog.warn("trace flush failed methodId=" + context.getEntryMethodId()
+                        + " cause=" + t.getClass().getSimpleName());
+            } finally {
+                TraceContextHolder.clear();
+            }
         }
     }
 }

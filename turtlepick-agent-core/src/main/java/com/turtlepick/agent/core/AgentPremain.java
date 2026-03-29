@@ -9,10 +9,15 @@ import com.turtlepick.agent.core.git.GitCommitHashProvider;
 import com.turtlepick.agent.core.http.EngineMetaClient;
 import com.turtlepick.agent.core.http.MetaJsonCodec;
 import com.turtlepick.agent.core.instrument.ApplicationMethodTransformer;
+import com.turtlepick.agent.core.instrument.SpringWebRequestTransformer;
 import com.turtlepick.agent.core.instrument.MethodProbeIndex;
 import com.turtlepick.agent.core.instrument.MethodProbeIndexBuilder;
 import com.turtlepick.agent.core.state.AgentStateHolder;
+import com.turtlepick.agent.core.state.EndpointRegistry;
+import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
+import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
+import com.turtlepick.agent.core.trace.TraceLogWriter;
 import com.turtlepick.agent.core.util.AgentLog;
 
 import java.io.File;
@@ -38,6 +43,7 @@ public final class AgentPremain {
 
             AgentStateHolder stateHolder = new AgentStateHolder();
             MethodMappingRegistry methodMappingRegistry = new MethodMappingRegistry();
+            EndpointRegistry endpointRegistry = new EndpointRegistry();
             GitCommandRunner gitCommandRunner = new GitCommandRunner();
             GitCommitHashProvider commitHashProvider = new GitCommitHashProvider(gitCommandRunner);
             MetaJsonCodec metaJsonCodec = new MetaJsonCodec();
@@ -45,6 +51,7 @@ public final class AgentPremain {
             AgentBootstrapService bootstrapService = new AgentBootstrapService(
                     stateHolder,
                     methodMappingRegistry,
+                    endpointRegistry,
                     commitHashProvider,
                     engineMetaClient
             );
@@ -59,14 +66,21 @@ public final class AgentPremain {
                 return;
             }
 
+            RuntimeMethodBridge.installEndpointResolver(new EndpointResolver(endpointRegistry));
+            TraceLogWriter.install(config.getLoggingDir(), config.getRollingIntervalMinutes());
             MethodProbeIndex probeIndex =
                     new MethodProbeIndexBuilder().build(methodMappingRegistry.snapshot());
 
             inst.addTransformer(new ApplicationMethodTransformer(probeIndex), false);
+            if (config.isInstrumentationHttp()) {
+                inst.addTransformer(new SpringWebRequestTransformer(), false);
+            }
 
             AgentLog.info("method probe installed"
                     + " commitHash=" + result.getCommitHash()
-                    + " methodCount=" + result.getMethodCount());
+                    + " methodCount=" + result.getMethodCount()
+                    + " endpointCount=" + result.getEndpointCount()
+                    + " httpInstrumentation=" + config.isInstrumentationHttp());
         } catch (Throwable t) {
             AgentLog.error("startup failed; agent disabled", t);
         }
