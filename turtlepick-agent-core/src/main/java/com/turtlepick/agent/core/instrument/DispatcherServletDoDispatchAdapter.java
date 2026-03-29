@@ -18,7 +18,6 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
     private final Label startLabel = new Label();
     private final Label endLabel = new Label();
     private final Label handlerLabel = new Label();
-    private int throwableLocalIndex = -1;
 
     protected DispatcherServletDoDispatchAdapter(
             MethodVisitor methodVisitor,
@@ -31,7 +30,6 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
     @Override
     public void visitCode() {
         super.visitCode();
-        throwableLocalIndex = newLocal(Type.getType(Throwable.class));
         visitTryCatchBlock(startLabel, endLabel, handlerLabel, null);
         visitLabel(startLabel);
         loadArg(0);
@@ -49,9 +47,7 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
     public void visitMaxs(int maxStack, int maxLocals) {
         visitLabel(endLabel);
         visitLabel(handlerLabel);
-        storeLocal(throwableLocalIndex);
         visitMethodInsn(INVOKESTATIC, BRIDGE_OWNER, "safeExit", SAFE_EXIT_DESC, false);
-        loadLocal(throwableLocalIndex);
         throwException();
         super.visitMaxs(maxStack, maxLocals);
     }

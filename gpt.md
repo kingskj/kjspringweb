@@ -796,3 +796,186 @@
 - 참고:
   - 이전 세션에서 읽었던 engine `application.yml`에는 `optional:file:../config.yml` 경로가 함께 있었고, 그때는 루트 `config.yml`을 정상 인식했던 정황이 있다.
   - 즉 이번 failure는 git sync/branch 문제 이전에 `config import path`가 루트 `config.yml`을 못 보게 된 설정 회귀로 보는 게 맞다.
+
+## 73) 2026-03-29 turtlepick main/work 실제 상태 확인 메모
+- 사용자 요청에 따라 `D:\workspace\turtlepick` 저장소의 실제 `main` / `work` 상태를 확인했다.
+- 결과:
+  - `main = 029dbc3f90dcfa6f880bad7b19928707128f03d6`
+  - `work = 6c26240cf399cf6d16815ad013939a546ca9ace4`
+  - `git branch --contains 6c26240...` 결과는 `work`만 반환되고 `main`은 반환되지 않는다.
+  - `git log main..work`에는 8개 커밋이 남아 있어 현재 `main`은 `work` 최신 내용을 포함하지 않는다.
+- 따라서 현재 눈앞의 `turtlepick` 워킹트리 기준으로는 `work`와 `main`이 동일하지 않다.
+- `main` reflog에는 `merge work: Fast-forward` 흔적이 있지만 결과 포인터가 `029dbc3`에 머물러 있어, 지금의 `work` 최신 tip(`6c26240`)이 이 `main`에 실제 반영된 상태는 아니다.
+- 결론:
+  - `work`에서 bootRun이 되고 `main`에서 안 되는 건 정상이다.
+  - 원인은 `main`이 아직 `work` 최신 커밋과 `application.yml` 변경(`../config.yml` import 포함)을 가지고 있지 않기 때문이다.
+
+## 74) 2026-03-29 push 후 재검증 메모
+- `kjspringweb` 현재 HEAD는 `4123e550a44763c53d41b4694149004732c871a3`이고, 로컬 기준 `work...origin/work`로 보여 push 자체는 반영된 상태다.
+- 하지만 엔진 재기동 후에도 실응답은 동일했다.
+  - `POST http://localhost:8081/api/agent/meta` with commit `4123e550...`
+  - 결과: HTTP 200, `status=LOG_OFF`, `reason=COMMIT_NOT_INDEXED`
+- 최신 engine 로그 `D:\workspace\turtlepick\logs\engine-app-20260329-165141.log` 기준:
+  - startup 후 runtime clone은 여전히 `586234...`를 보고 있음
+  - polling sync에서 `remote branch not found: work`
+  - `branches=[main, develop, work] newCommits=0 skipped=5`
+- 따라서 push는 되었지만 engine runtime clone의 fetch 대상이 여전히 `main`만이라 `origin/work`를 로컬 ref로 못 만들고 있다.
+- 추가 확인:
+  - engine startup resume는 `http://localhost:8080/agent/resume`로 실패했다
+  - 직접 `http://localhost:8080/login` 조회도 연결 실패였으므로, target server가 현재 8080에서 떠 있지는 않은 상태로 보인다
+
+## 75) 2026-03-29 재기동 후 최신 실검증 메모
+- 현재 `kjspringweb` HEAD는 `4123e550a44763c53d41b4694149004732c871a3`.
+- 엔진 `http://localhost:8081/api/health`는 HTTP 200 `UP`로 정상.
+- 하지만 `POST /api/agent/meta` with commit `4123e550...` 결과는 여전히:
+  - HTTP 200
+  - `status=LOG_OFF`
+  - `reason=COMMIT_NOT_INDEXED`
+  - `methods=[]`
+  - `endpoints=[]`
+- 최신 engine 로그에서도 polling sync는 계속:
+  - `remote branch not found: work`
+  - `branches=[main, develop, work] newCommits=0 skipped=5`
+  - startup analysis 대상은 여전히 `586234a0...`
+- 따라서 현재 시점 결론은 동일하다.
+  - 엔진은 살아 있지만 `kjspringweb` 현재 커밋 `4123e55...`는 아직 인덱싱되지 않았다.
+  - 원인은 engine runtime clone이 `work` 브랜치 ref를 못 잡는 쪽에 남아 있다.
+
+## 76) 2026-03-29 runtime clone fetch spec 수정 후 실엔진 메타 OK 확인
+- 사용자가 engine runtime clone에서 아래 순서를 직접 수행했다.
+  - `git -C D:\turtlepick\runtime\source\kjspringweb config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"`
+  - `git -C D:\turtlepick\runtime\source\kjspringweb fetch --prune origin`
+  - 결과로 `origin/work`가 생성되고 `rev-parse origin/work = 4123e550a44763c53d41b4694149004732c871a3` 확인
+- 이어서 `POST /api/git/sync` 수동 호출 결과:
+  - HTTP 200
+  - `status=SUCCESS`
+  - `toCommit=4123e550a44763c53d41b4694149004732c871a3`
+  - `processedCount=2`
+- 마지막으로 `POST /api/agent/meta` with commit `4123e550...` 결과:
+  - HTTP 200
+  - `status=OK`
+  - `agentId=kjspringweb-local-...`
+  - `methods[]`, `endpoints[]` 포함한 실제 메타 payload 수신 성공
+- 결론:
+  - 기존 `COMMIT_NOT_INDEXED` 원인은 engine runtime clone의 fetch spec/main-only 상태였다.
+  - fetch spec 수정 + manual sync 후 실엔진 메타는 정상 복구됐다.
+
+## 77) 2026-03-29 agent end-to-end 실기동 검증 결과
+- 목적:
+  - 실엔진 메타 `status=OK` 상태에서 `kjspringweb`를 `-javaagent`로 기동하고 실제 공개 엔드포인트 호출 후 trace 파일 생성까지 확인
+- 기동 명령:
+  - `java -javaagent:D:\workspace\kjspringweb\turtlepick-agent-core\build\libs\turtlepick-agent-core-0.1.0-SNAPSHOT.jar -jar D:\workspace\kjspringweb\build\libs\kjspringweb-0.0.1-SNAPSHOT.jar --spring.datasource.url=jdbc:h2:mem:testdb --server.port=8080 --spring.batch.job.enabled=false`
+- 결과:
+  - agent bootstrap 자체는 성공
+  - boot 로그 기준:
+    - `config loaded path=D:\workspace\kjspringweb\turtlepick.properties`
+    - `method probe installed commitHash=4123e550... methodCount=88 endpointCount=28 httpInstrumentation=true`
+  - 그러나 Spring MVC 초기화 중 `DispatcherServlet#doDispatch` 변조 bytecode 검증에서 서버가 기동 실패
+    - `Caused by: java.lang.VerifyError: Bad type on operand stack`
+    - location: `org/springframework/web/servlet/DispatcherServlet.doDispatch(Ljakarta/servlet/http/HttpServletRequest;Ljakarta/servlet/http/HttpServletResponse;)V`
+    - reason: `Type 'java/lang/Object' ... is not assignable to 'java/lang/Exception'`
+- 코드 기준 의심 지점:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/instrument/DispatcherServletDoDispatchAdapter.java`
+  - 현재 `visitCode()` + `onMethodExit()` + `visitMaxs()`로 try/catch를 합성하는 방식이 Spring Boot 4 / Tomcat 11의 `jakarta` `DispatcherServlet#doDispatch` stack map과 충돌하는 것으로 보임
+- 부수 결과:
+  - 서버가 뜨기 전에 죽어서 `http://localhost:8080/auth/login`는 연결 실패
+  - `turtlepick-logs/` 디렉터리도 생성되지 않았고 trace 파일 검증은 아직 못 감
+- 현재 결론:
+  - 엔진 메타/endpoint 공급은 정상
+  - agent 7-1/7-2의 첫 실기동 blocker는 `DispatcherServlet` HTTP instrumentation의 verifier 오류
+
+## 78) 2026-03-29 VerifyError 원인 추가 진단 메모
+- Claude의 `VerifyError: Bad type on operand stack = ASM frame 문제` 진단은 맞는 방향으로 보인다.
+- 특히 1차 용의자는 `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/instrument/SpringWebRequestTransformer.java`의 내부 `SafeClassWriter#getCommonSuperClass()` 구현이다.
+  - 현재 구현은 `type1 != type2`면 거의 무조건 `java/lang/Object`를 반환한다.
+  - `DispatcherServlet#doDispatch`처럼 기존 예외 핸들러와 stack map frame이 많은 복잡한 메서드에서 `Exception` 계열 공통 상위를 `Object`로 낮춰버리면 verifier가 `Object is not assignable to Exception`로 죽을 수 있다.
+- 실제 기동 오류 메시지:
+  - `Bad type on operand stack`
+  - `Type 'java/lang/Object' ... is not assignable to 'java/lang/Exception'`
+- 따라서 현재 판단은:
+  - 단순히 `DispatcherServletDoDispatchAdapter`의 try/catch 삽입이 거칠다는 수준을 넘어서,
+  - frame 재계산 시 공통 상위 타입 계산을 너무 보수적으로 `Object`로 뭉갠 것이 핵심 원인 후보다.
+- 같은 `SafeClassWriter` 패턴은 `ApplicationMethodTransformer`에도 있으므로, 수정 시 둘 다 같이 보는 편이 안전하다.
+
+## 79) 2026-03-29 DispatcherServletDoDispatchAdapter 로컬 슬롯 제거 제안 판정
+- 사용자가 제안한 수정안:
+  - `DispatcherServletDoDispatchAdapter`에서 `throwableLocalIndex` 필드 제거
+  - `visitCode()`의 `newLocal(Throwable.class)` 제거
+  - `visitMaxs()` handler에서 `storeLocal/loadLocal` 없이, handler 진입 스택의 `Throwable`를 그대로 둔 채 `safeExit()` 후 `ATHROW`
+- 내 판정:
+  - 이 수정은 `synthetic catch handler`의 복잡성을 줄이는 1차 보정으로 타당하다.
+  - 다만 `ASM LocalVariablesSorter + newLocal + storeLocal/loadLocal` 조합 자체는 일반적으로 허용되는 패턴이라, `double remap`을 확정 원인으로 단정하기보다는 verifier-safe하게 단순화하는 패치로 보는 게 정확하다.
+  - 즉 `로컬 슬롯 제거`는 해볼 가치가 높은 유효한 수정이다.
+- 후속 판단 기준:
+  - 이 패치 후에도 `VerifyError`가 남으면, 다음 1순위 원인은 여전히 `SafeClassWriter#getCommonSuperClass()`의 과도한 `java/lang/Object` 반환이다.
+
+## 80) 2026-03-29 HTTP instrumentation verifier 수정 및 실검증 결과
+- 반영:
+  - `DispatcherServletDoDispatchAdapter`에서 synthetic handler의 `Throwable` 로컬 슬롯 사용 제거
+  - `SpringWebRequestTransformer`, `ApplicationMethodTransformer`의 `SafeClassWriter#getCommonSuperClass()`를 실제 상속관계 기반으로 계산하도록 보정
+- 실기동 결과:
+  - 기존 `VerifyError: Bad type on operand stack`는 재현되지 않음
+  - `-javaagent`로 `kjspringweb`를 띄우면 Tomcat 8080까지 정상 기동
+  - agent bootstrap 로그:
+    - `method probe installed commitHash=4123e550... methodCount=88 endpointCount=28 httpInstrumentation=true`
+- 실제 요청 검증:
+  - `GET /auth/login`은 HTTP 200이지만 trace 파일에 추가 라인이 생기지 않음
+  - `GET /`는 HTTP 200이고 `turtlepick-logs/trace-202603291723.log`에 아래와 같이 실제 trace 기록 확인
+    - `entryFqcnMethod=com.kjweb.web.controller.HomeController#home()`
+    - `endpointEntryType=HTTP`
+    - `endpointEntryKey=/`
+    - `endpointHttpMethod=GET`
+    - `requestMethod=GET`
+    - `requestUri=/`
+    - `endpointResolutionStatus=RESOLVED`
+- `/auth/login`이 안 찍히는 직접 원인:
+  - engine meta의 method signature가 `AuthController#loginPage(String,Model)`처럼 parameter simple name 기준으로 내려옴
+  - agent `MethodProbeIndex`는 runtime descriptor를 `java.lang.String`, `org.springframework.ui.Model` 같은 canonical FQCN으로 비교
+  - 그래서 object parameter가 있는 controller method 상당수가 probe 매칭에 실패하는 상태
+- 현재 상태 요약:
+  - 엔진 meta/endpoints 공급: 정상
+  - HTTP instrumentation verifier 문제: 해결
+  - trace writer/file rolling: 동작 확인
+  - 남은 blocker:
+    - simple-name parameter signature와 runtime canonical type 비교 불일치
+
+## 81) 2026-03-29 simple-name vs FQCN 불일치 책임 위치 판정
+- 현재 판단:
+  - 남은 이슈의 1차 책임은 agent가 아니라 engine-core-private AST 추출 계층이다.
+  - agent의 `MethodProbeIndex`는 runtime descriptor를 canonical FQCN으로 비교하고 있어 방향 자체는 맞다.
+- 근거:
+  - `engine-core-private/src/main/java/com/turtlepick/core/service/MappingAssembler.java`
+    - `resolveHandlerParamTypes()`가 `p.getType().asString()`을 그대로 사용
+  - `engine-core-private/src/main/java/com/turtlepick/core/service/BusinessLayerScanner.java`
+    - method param types를 `asString()`으로 저장
+  - `engine-core-private/src/main/java/com/turtlepick/core/service/BatchJobExtractor.java`
+    - method param types를 `asString()`으로 저장
+  - `engine-core-private/src/main/java/com/turtlepick/core/service/ServiceCallExtractor.java`
+    - `toFqcnMethod()`도 `asString()` 기반
+  - `IdGenerator.methodId(...)`는 이 param type 문자열 자체를 해시 키로 사용하므로, 수정은 adapter가 아니라 method-id 생성 파이프라인 전체에서 일관되게 이뤄져야 한다.
+- 결론:
+  - 수정 위치는 `engine-app` 어댑터보다 앞단인 `engine-core-private` method definition 생성 계층이 맞다.
+  - 수정 후에는 현재 commit 재인덱싱이 필요하다.
+
+## 82) 2026-03-29 FQCN 정규화 작업지시 문서 리뷰 메모
+- `task-fqcn-param-normalization.md` 방향은 전반적으로 타당하다.
+- 다만 구현 시 아래 2가지는 보정 권장:
+  - `ParamTypeResolver.stripGenerics()`를 먼저 적용하면 `List<String>[]` 같은 타입에서 배열 suffix가 유실될 수 있다. 배열/varargs 처리는 제네릭 제거보다 앞이나 별도 로직으로 다루는 편이 안전하다.
+  - 재인덱싱 SQL은 `method_def`, `method_mapping`만이 아니라 같은 commit의 `endpoint_mapping`도 함께 비우는 쪽이 더 안전하다. methodId가 바뀌는 재인덱싱이므로 target commit row 일괄 삭제 후 sync가 깔끔하다.
+- 추가 의견:
+  - `String...` 같은 varargs는 bytecode에선 `String[]`이므로 resolver에서 `... -> []` 정규화가 필요하다.
+
+## 83) 2026-03-29 FQCN 작업지시서 추가 리뷰 포인트
+- `rawType`에 점(`.`)이 있다고 바로 FQCN으로 간주하는 규칙은 느슨하다.
+  - `Outer.Inner`, `ResponseEntity.BodyBuilder` 같은 nested/simple type도 점을 포함할 수 있다.
+  - package-qualified FQCN인지 판정 규칙을 더 보수적으로 두거나, import/current package 해석을 먼저 거치는 편이 안전하다.
+- 재인덱싱 SQL은 문서 본문처럼 `commit_version 유지 + is_active=false`보다, 현재 샌드박스 단계에서는 `endpoint_mapping`, `method_mapping`, `method_def`, `commit_version` 전체 초기화 쪽이 합의된 방향이다.
+
+## 84) 2026-03-29 엔진 작업지시서 확정본 반영 메모
+- 사용자 지시에 따라 엔진 docs에 최종 작업지시서 파일 생성:
+  - `D:\workspace\turtlepick\docs\작업지시서_20260329.md`
+- 반영한 보정 포인트:
+  - 배열 suffix는 제네릭 제거보다 먼저 처리
+  - varargs `...`는 `[]`로 정규화
+  - `contains(".")`만으로 FQCN 확정하지 않고 더 보수적 규칙 사용
+  - 샌드박스 환경 기준 재인덱싱 SQL은 전체 초기화 방식으로 정리
