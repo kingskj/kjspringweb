@@ -65,9 +65,11 @@ public final class TurtlepickConfigLoader {
     }
 
     AgentConfig bind(Properties properties) {
+        int metaTimeoutMs = getInt(properties, "turtlepick.engine.meta.timeout-ms", 3000);
         return AgentConfig.builder()
                 .engineBaseUrl(getRequiredString(properties, "turtlepick.engine.base-url"))
-                .engineMetaTimeoutMs(getInt(properties, "turtlepick.engine.meta.timeout-ms", 3000))
+                .engineMetaTimeoutMs(metaTimeoutMs)
+                .engineLogReadyTimeoutMs(getInt(properties, "turtlepick.engine.log-ready.timeout-ms", metaTimeoutMs))
                 .agentServerId(getRequiredString(properties, "turtlepick.agent.server-id"))
                 .agentAppName(getRequiredString(properties, "turtlepick.agent.app-name"))
                 .agentGitRepoRoot(getOptionalString(properties, "turtlepick.agent.git.repo-root", System.getProperty("user.dir")))
@@ -92,6 +94,9 @@ public final class TurtlepickConfigLoader {
         }
         if (config.getEngineMetaTimeoutMs() <= 0) {
             throw new IllegalArgumentException("turtlepick.engine.meta.timeout-ms must be > 0");
+        }
+        if (config.getEngineLogReadyTimeoutMs() <= 0) {
+            throw new IllegalArgumentException("turtlepick.engine.log-ready.timeout-ms must be > 0");
         }
     }
 
@@ -146,3 +151,4 @@ public final class TurtlepickConfigLoader {
         }
     }
 }
+

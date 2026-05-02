@@ -1027,3 +1027,37 @@
   - 엔진 기동/health/meta/git-sync/log-ready 기본 계약은 살아 있다.
   - agent bootstrap과 HTTP `/` trace 귀속은 정상이다.
   - 다음 실제 blocker는 여전히 `engine-core-private`의 `ParamTypeResolver` 기반 파라미터 타입 FQCN 정규화 반영이다.
+
+## 87) 2026-05-02 수동 기동/E2E 실행 산출물 경로 규칙
+- 서버 자체 로그와 TurtlePick agent trace spool, 수동 실행 산출물을 명확히 분리한다.
+- `turtlepick-logs/trace-*.log`는 엔진 수거 대상 agent trace spool이며, 서버 자체 로그 정비나 루트 찌꺼기 청소 대상이 아니다.
+- `logs/`는 서버 자체 logback 로그 및 수동 검증 산출물을 모으는 경로로 사용한다.
+- 수동 서버 기동, smoke, E2E 검증 시 stdout/stderr/pid 같은 실행 산출물은 프로젝트 루트에 생성하지 않는다.
+- 필요한 경우 실행 산출물은 반드시 아래 하위 경로로 리다이렉트한다.
+  - `logs/runtime/`: 수동 기동 프로세스의 stdout/stderr/pid
+  - `logs/smoke/`: 일회성 smoke/E2E 검증 stdout/stderr/pid
+- 금지 예:
+  - `app-stdout.log`
+  - `app-stderr.log`
+  - `agent-e2e-run.pid`
+  - `agent-e2e*.out.log`
+  - `agent-e2e*.err.log`
+- 재발 방지 원칙:
+  - PowerShell `Start-Process -RedirectStandardOutput/-RedirectStandardError` 사용 시 출력 경로를 루트 파일명으로 두지 않는다.
+  - `>`/`2>` 리다이렉션 사용 시에도 `logs/runtime/` 또는 `logs/smoke/` 하위 파일을 명시한다.
+  - `.gitignore`는 보조 안전망일 뿐이며, 핵심 규칙은 "루트에 만들지 않기"다.
+
+## 88) 2026-05-02 TurtlePick 추출 검증 테스트베드 초안 보류
+- 잼미니가 제안/생성한 TurtlePick 추출 검증용 초안 파일 5개는 사용자 확정 전 독단 생성물로 판단하여 반영하지 않는다.
+  - `TurtlePickDummyEvent.java`
+  - `TurtlePickTestService.java`
+  - `TurtlePickTestController.java`
+  - `TurtlePickTestListener.java`
+  - `TurtlePickTestRunner.java`
+- 실제 확인 결과 위 파일들은 프로젝트 루트에 0바이트 파일로 생성되어 있었고, 사용자 `확정 반영` 지시에 따라 물리 삭제했다.
+- 향후 추출 검증 테스트베드는 코드부터 작성하지 않고, 먼저 아래 기준으로 설계안을 확정한 뒤 반영한다.
+  - 공통 인프라/AOP/Filter/Interceptor/ExceptionHandler/ControllerAdvice는 추출 대상에서 제외한다.
+  - 대상은 공통 작업이 아니라 프로그래머가 직접 작성한 업무적 사이클이다.
+  - 현대 Spring Boot 대상서버 검증과 레거시 Spring 검증은 섞지 않는다.
+  - 레거시 Spring 검증은 필요 시 별도 대상 서버 프로젝트로 분리한다.
+  - 특수 업무 entry는 자동 광역 스캔보다 config의 FQCN 명시(`instrumentation.ast.extra-entry-classes`)를 우선 고려한다.

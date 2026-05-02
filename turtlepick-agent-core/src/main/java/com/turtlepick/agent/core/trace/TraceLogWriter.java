@@ -24,16 +24,27 @@ public final class TraceLogWriter {
     private static int rollingIntervalMinutes;
     private static long currentSlot = Long.MIN_VALUE;
     private static PrintWriter writer;
+    private static String currentFileName;
+    private static LogReadyNotifier logReadyNotifier;
 
     private TraceLogWriter() {
     }
 
     public static void install(String loggingDirValue, int rollingIntervalMinutesValue) {
+        install(loggingDirValue, rollingIntervalMinutesValue, null);
+    }
+
+    public static void install(String loggingDirValue, int rollingIntervalMinutesValue, LogReadyNotifier notifier) {
         synchronized (LOCK) {
+            String closedFileName = currentFileName;
             closeCurrentWriter();
+            notifyClosed(closedFileName);
+
             loggingDir = trimToNull(loggingDirValue);
             rollingIntervalMinutes = rollingIntervalMinutesValue;
+            logReadyNotifier = notifier;
             currentSlot = Long.MIN_VALUE;
+            currentFileName = null;
 
             if (loggingDir == null) {
                 AgentLog.warn("trace log writer disabled cause=LOGGING_DIR_BLANK");
@@ -75,7 +86,9 @@ public final class TraceLogWriter {
     }
 
     private static void rotateWriter(long now, long nextSlot) throws IOException {
+        String closedFileName = currentFileName;
         closeCurrentWriter();
+        notifyClosed(closedFileName);
 
         File directory = new File(loggingDir);
         if (!directory.exists() && !directory.mkdirs()) {
@@ -87,11 +100,12 @@ public final class TraceLogWriter {
             return;
         }
 
-        String fileName = "trace-" + FILE_NAME_FORMAT.format(Instant.ofEpochMilli(now)) + ".log";
-        File targetFile = new File(directory, fileName);
+        String nextFileName = "trace-" + FILE_NAME_FORMAT.format(Instant.ofEpochMilli(now)) + ".log";
+        File targetFile = new File(directory, nextFileName);
         writer = new PrintWriter(new BufferedWriter(
                 new OutputStreamWriter(new FileOutputStream(targetFile, true), StandardCharsets.UTF_8)
         ));
+        currentFileName = nextFileName;
         currentSlot = nextSlot;
     }
 
@@ -99,6 +113,14 @@ public final class TraceLogWriter {
         closeQuietly(writer);
         writer = null;
         currentSlot = Long.MIN_VALUE;
+        currentFileName = null;
+    }
+
+    private static void notifyClosed(String fileName) {
+        LogReadyNotifier notifier = logReadyNotifier;
+        if (notifier != null && fileName != null) {
+            notifier.onClosed(fileName);
+        }
     }
 
     private static void closeQuietly(Closeable closeable) {

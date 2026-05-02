@@ -4,6 +4,7 @@ public final class AgentConfig {
 
     private final String engineBaseUrl;
     private final int engineMetaTimeoutMs;
+    private final int engineLogReadyTimeoutMs;
     private final String agentServerId;
     private final String agentAppName;
     private final String agentGitRepoRoot;
@@ -17,6 +18,7 @@ public final class AgentConfig {
     private AgentConfig(Builder builder) {
         this.engineBaseUrl = builder.engineBaseUrl;
         this.engineMetaTimeoutMs = builder.engineMetaTimeoutMs;
+        this.engineLogReadyTimeoutMs = builder.engineLogReadyTimeoutMs;
         this.agentServerId = builder.agentServerId;
         this.agentAppName = builder.agentAppName;
         this.agentGitRepoRoot = builder.agentGitRepoRoot;
@@ -38,6 +40,10 @@ public final class AgentConfig {
 
     public int getEngineMetaTimeoutMs() {
         return engineMetaTimeoutMs;
+    }
+
+    public int getEngineLogReadyTimeoutMs() {
+        return engineLogReadyTimeoutMs;
     }
 
     public String getAgentServerId() {
@@ -80,6 +86,7 @@ public final class AgentConfig {
 
         private String engineBaseUrl;
         private int engineMetaTimeoutMs = 3000;
+        private int engineLogReadyTimeoutMs = 3000;
         private String agentServerId;
         private String agentAppName;
         private String agentGitRepoRoot;
@@ -100,6 +107,11 @@ public final class AgentConfig {
 
         public Builder engineMetaTimeoutMs(int value) {
             this.engineMetaTimeoutMs = value;
+            return this;
+        }
+
+        public Builder engineLogReadyTimeoutMs(int value) {
+            this.engineLogReadyTimeoutMs = value;
             return this;
         }
 
@@ -153,3 +165,4 @@ public final class AgentConfig {
         }
     }
 }
+

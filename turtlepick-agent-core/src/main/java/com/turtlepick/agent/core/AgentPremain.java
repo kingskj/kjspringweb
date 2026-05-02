@@ -7,6 +7,8 @@ import com.turtlepick.agent.core.config.TurtlepickConfigLoader;
 import com.turtlepick.agent.core.git.GitCommandRunner;
 import com.turtlepick.agent.core.git.GitCommitHashProvider;
 import com.turtlepick.agent.core.http.EngineMetaClient;
+import com.turtlepick.agent.core.http.EngineLogReadyClient;
+import com.turtlepick.agent.core.http.LogReadyJsonCodec;
 import com.turtlepick.agent.core.http.MetaJsonCodec;
 import com.turtlepick.agent.core.instrument.ApplicationMethodTransformer;
 import com.turtlepick.agent.core.instrument.SpringWebRequestTransformer;
@@ -17,6 +19,7 @@ import com.turtlepick.agent.core.state.EndpointRegistry;
 import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
 import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
+import com.turtlepick.agent.core.trace.LogReadyNotifier;
 import com.turtlepick.agent.core.trace.TraceLogWriter;
 import com.turtlepick.agent.core.util.AgentLog;
 
@@ -48,6 +51,7 @@ public final class AgentPremain {
             GitCommitHashProvider commitHashProvider = new GitCommitHashProvider(gitCommandRunner);
             MetaJsonCodec metaJsonCodec = new MetaJsonCodec();
             EngineMetaClient engineMetaClient = new EngineMetaClient(metaJsonCodec);
+            EngineLogReadyClient logReadyClient = new EngineLogReadyClient(new LogReadyJsonCodec());
             AgentBootstrapService bootstrapService = new AgentBootstrapService(
                     stateHolder,
                     methodMappingRegistry,
@@ -67,7 +71,9 @@ public final class AgentPremain {
             }
 
             RuntimeMethodBridge.installEndpointResolver(new EndpointResolver(endpointRegistry));
-            TraceLogWriter.install(config.getLoggingDir(), config.getRollingIntervalMinutes());
+            LogReadyNotifier logReadyNotifier = new LogReadyNotifier(logReadyClient, config, result.getCommitHash());
+            logReadyNotifier.start();
+            TraceLogWriter.install(config.getLoggingDir(), config.getRollingIntervalMinutes(), logReadyNotifier);
             MethodProbeIndex probeIndex =
                     new MethodProbeIndexBuilder().build(methodMappingRegistry.snapshot());
 
@@ -98,3 +104,4 @@ public final class AgentPremain {
         }
     }
 }
+

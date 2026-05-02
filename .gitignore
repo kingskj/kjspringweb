@@ -41,3 +41,6 @@ logs/
 turtlepick-logs/
 *.out.log
 *.err.log
+*-stdout.log
+*-stderr.log
+*.pid
