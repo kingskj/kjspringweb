@@ -123,72 +123,59 @@ kjspringweb/
 
 ---
 
-## 11. 현재 상태 (2026-03-28)
+## 11. 현재 상태 (2026-05-02)
 
 - GCP 배포 상태로 동작 확인
-- 배치 트랜잭션 롤백 정상 확인 (짝수일 삭제 배치 FAILED → 삭제 롤백 정상)
-- TurtlePick Agent 개발 착수 (2026-03-28~)
+- TurtlePick Agent 섹터 1~7 완료 (`turtlepick-agent-core` 모듈)
 - TurtlePick Engine 로컬 기동 확인 (localhost:8081, health UP)
+- kjspringweb HEAD: `6e32875811200f879762478aadc73a9850d89e98` (엔진에 인덱싱 완료)
+- 실기동 E2E smoke 결과:
+  - `GET /` → trace RESOLVED 확인 (`HomeController#home()`)
+  - `GET /auth/login` → HTTP 200이지만 trace 누락 (FQCN 정규화 blocker)
+  - `GreetingBatchConfig#...Job()` → NO_CANDIDATE (BATCH endpoint 미구현, 정상 범위)
+- 로그 정비 완료 (`logback-spring.xml`, `.gitignore`, `application.yml`)
+- `DemoApplicationTests.java` 잔재 파일 제거 필요 (`gradlew test` 실패 원인)
 
 ---
 
-## 12. Server Agent 설계 확정 (2026-03-28)
+## 12. Server Agent 구현 현황 (2026-05-02)
 
-### server-agent 모듈 방향
-- Spring Boot starter auto-configuration 모듈
-- turtlepick 멀티모듈 내 독립 모듈로 신설
-- kjspringweb에 의존성 추가만으로 부착 (소스 무간섭)
+### 모듈 방향 (확정)
+- **javaagent JAR** 방식 (Spring Boot starter 아님) — 레거시 Spring 포함 호환
+- `D:\workspace\kjspringweb\turtlepick-agent-core` 위치
+- Java 8 호환, JDK-only, ASM 9.9.1 shadow/relocate
+- 설정 파일: `turtlepick.properties` (`-Dturtlepick.config` 또는 `user.dir`)
 
-### 첫 단위 구현 범위 (meta 핸드셰이크)
-- `GitCommitHashProvider` — `git -C {repoRoot} rev-parse HEAD`, full 40자 hex 검증
-- `EngineMetaClient` — JDK HttpClient, `POST /api/agent/meta`
-- `AgentStateHolder` — `AtomicReference<AgentState>`, `LOG_ON`/`LOG_OFF` 2상태
-- `MethodMappingRegistry` — method 매핑 메모리 적재
-- `AgentBootstrapService` — hash 확보 → meta → state 결정
-- `AgentStartupListener` — `ApplicationReadyEvent` 1회 호출
+### 섹터 구현 현황
 
-### 이번 단위 제외
-- `/agent/resume` endpoint
-- AOP 계측, SQL 계측, 로그 파일 생성/롤링, log-ready
+| 섹터 | 내용 | 상태 |
+|------|------|------|
+| 1 | `AgentPremain` — premain 진입, 의존성 조립 | ✅ |
+| 2 | `TurtlepickConfigLoader` — properties 로드 | ✅ |
+| 3 | `GitCommitHashProvider` — full 40자 hex hash | ✅ |
+| 4 | `EngineMetaClient` — `POST /api/agent/meta` | ✅ |
+| 5 | `MethodMappingRegistry` — fqcnMethod→methodId 적재 | ✅ |
+| 6 | ASM probe (`instrument` + `trace` 패키지) | ✅ |
+| 7 | HTTP context + endpoint 귀속 + trace 파일 기록/롤링 | ✅ |
+| 8 | `POST /api/agent/log-ready` 전송 | ❌ 미구현 |
+| 9 | 엔진 수거 응답 처리 (파일 삭제/오프셋) | ❌ 미구현 |
 
-### 고정 정책 (코드 고정, config 제어 불가)
-- 엔진 무응답/실패 → 무조건 `LOG_OFF`
-- 파일명 패턴: `{server_id}_{yyyyMMdd}_{HHmmss}.ndjson`
-
-### config 파일 구조 (`kjspringweb/turtlepick.yml`)
-```yaml
-turtlepick:
-  engine:
-    base-url: http://localhost:8081
-    meta:
-      timeout-ms: 3000
-  agent:
-    server-id: kjspringweb-local
-    app-name: kjspringweb
-    git:
-      repo-root: .        # optional, 미설정 시 user.dir
-    logging:
-      dir: ./turtlepick-logs
-      rolling:
-        interval-minutes: 5
-    instrumentation:
-      http: true
-      service: true
-      sql:
-        datasource-proxy: true
-        mybatis-interceptor: false
-```
-
-### Properties 클래스
-- `TurtlepickEngineProperties` (prefix: `turtlepick.engine`)
-- `TurtlepickAgentProperties` (prefix: `turtlepick.agent`)
+### trace 파일
+- 경로: `turtlepick-logs/trace-{yyyyMMddHHmm}.log`
+- 포맷: 1줄 JSON (JDK-only, ndjson)
+- 롤링: slot 기반 (`rollingIntervalMinutes`)
 
 ---
 
-## 13. 다음 과제
+## 13. 다음 과제 (2026-05-02 기준)
 
-1. **starter auto-configuration 내부 구조** — 진행 중
-2. Agent 붙인 후 TurtlePick Engine(localhost:8081)과 연동 테스트
+| 순위 | 작업 | 위치 |
+|------|------|------|
+| 1 | 엔진 FQCN 파라미터 정규화 (`작업지시서_20260329.md`) | turtlepick/engine-core-private |
+| 2 | 엔진 `POST /api/git/index` 추가 (commit on-demand 인덱싱) | turtlepick/engine-app |
+| 3 | DB 재인덱싱 → `/auth/login` trace RESOLVED 검증 | - |
+| 4 | Agent 8섹터: `POST /api/agent/log-ready` 전송 구현 | turtlepick-agent-core |
+| 5 | Agent 9섹터: 엔진 수거 응답 처리 | turtlepick-agent-core |
 
 ---
 
@@ -201,14 +188,20 @@ turtlepick:
 - 대상서버 serverId: `kjspringweb-local`
 - 현재 인덱싱된 최신 커밋: `586234a0a0ebbe8819d28805b32ee1c826c8e23f`
 
-### ⚠️ 엔진 기지 버그 (2026-03-28 발견, 미수정)
-- meta 요청 시 short hash(`586234a`) 전달 → 엔진 DB는 full hash 저장 → `COMMIT_NOT_INDEXED` 반환
-- 엔진 DB에 테스트용 더미 row `meta-incomplete-case` (seq=999999) 잔존
-- → **Agent 구현 시 meta 요청에 full commit hash 전달해야 함**
+### 엔진 연동 정보 최신화 (2026-05-02)
+- kjspringweb HEAD `6e32875...` 기준 meta → `status=OK`, `methods=88`, `endpoints=28` 정상
+- short hash는 여전히 `LOG_OFF / COMMIT_NOT_INDEXED` (정책 변경 없음)
+- **full hash 전달 필수** (agent `GitCommitHashProvider`가 full 40자로 처리 중)
+
+### ⚠️ 설계 갭 — branch-agnostic 인덱싱 미구현
+- 현재 엔진은 `monitoring-branches` 폴링으로만 commit 발견
+- 엔진 runtime repo가 fetch 가능한 remote ref에 commit object가 없으면 → 폴링 실패 → LOG_OFF
+- **해결책**: 엔진에 `POST /api/git/index` 추가 (hash가 remote repo에 존재하면 즉시 발번/인덱싱)
+- Agent 8섹터에서 `LOG_OFF(COMMIT_NOT_INDEXED)` 수신 시 이 API 자동 트리거 포함 **검토 중**
 
 ---
 
-## 14. 관련 프로젝트
+## 15. 관련 프로젝트
 
 | 프로젝트 | 역할 |
 |----------|------|
@@ -218,13 +211,13 @@ turtlepick:
 
 ---
 
-## 15. 작업 규칙 (2026-03-28)
+## 16. 작업 규칙 (2026-03-28)
 
 - CLAUDE.md 수정: Claude 자율 허용
 - 나머지 파일 수정: 금지 (오빠 명시적 지시 시에만)
 - Claude 역할: GPT 제안 딴지/보완안 채팅 제시만
 - 코드 수정 실행: GPT(Codex) 담당
 
-## 16. 작업 프로토콜
+## 17. 작업 프로토콜
 
 `work_protocol.md` 참고 (GPT + Claude 핑퐁 방식 동일 적용)

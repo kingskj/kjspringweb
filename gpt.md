@@ -979,3 +979,51 @@
   - varargs `...`는 `[]`로 정규화
   - `contains(".")`만으로 FQCN 확정하지 않고 더 보수적 규칙 사용
   - 샌드박스 환경 기준 재인덱싱 SQL은 전체 초기화 방식으로 정리
+
+## 85) 2026-05-02 TurtlePick 대상서버/엔진 문서 재분석 메모
+- 사용자 요청에 따라 `D:\workspace\turtlepick`의 `README.md`, `gpt.md`, `CLAUDE.md`, `docs/*`와 현재 `kjspringweb`의 `gpt.md`, `work_protocol.md`, `docs/*`를 다시 읽고 실제 코드 구조를 대조했다.
+- 현재 `kjspringweb` HEAD는 `6e32875811200f879762478aadc73a9850d89e98`이며, git status 기준 추적되지 않은 `.claude/`만 보인다.
+- 현재 `turtlepick` HEAD는 `842c0385035ef56af0ace351940ac85747f2f8b8`, branch는 `work`이며, git status 기준 추적되지 않은 `.claude/`만 보인다.
+- `kjspringweb`는 여전히 Spring Boot 4.0.2 + Java 17 + Thymeleaf + Security + JPA/H2 + Batch 구조이고, `turtlepick-agent-core`가 대상서버 저장소 내부에 별도 javaagent 모듈로 존재한다.
+- `turtlepick-agent-core`는 meta handshake, ASM method probe, HTTP context bridge, endpoint resolver, trace serializer/writer까지 구현되어 있으며 아직 `log-ready` 전송 단위는 구현되어 있지 않다.
+- `turtlepick` 엔진은 `engine-app`/`engine-core-private` 구조, Git sync, AST 발번, `/api/agent/meta`의 `methods[] + endpoints[]`, `/api/agent/log-ready` ACK 스텁, startup RESUME 전송까지 구현된 상태다.
+- 최신 확인된 핵심 blocker는 문서와 실제 코드가 일치한다: `engine-core-private`의 `BusinessLayerScanner`, `BatchJobExtractor`, `MappingAssembler`, `ServiceCallExtractor`가 여전히 `p.getType().asString()` 기반이라 파라미터 타입이 FQCN으로 정규화되지 않는다.
+- 따라서 `/auth/login`처럼 `String`, `Model` 등 파라미터가 있는 메서드는 engine method signature(`String,Model`)와 agent runtime descriptor(`java.lang.String,org.springframework.ui.Model`)가 불일치하여 probe 매칭/trace 누락 위험이 남아 있다.
+- 현재 프로젝트의 `MemberController` 실제 기본 경로는 `/member`이고 profile/withdraw는 `/member/profile`, `/member/withdraw`다. 과거 외부 문서의 `/profile`, `/withdraw` 단독 표기는 최신 코드와 다르다.
+- `kjspringweb`의 `DemoApplicationTests.java`는 여전히 `com.example.demo` 패키지 잔재라 `gradlew test` 실패 원인으로 남아 있으며, 이번 분석 턴에서는 코드/테스트 수정은 수행하지 않았다.
+
+## 86) 2026-05-02 TurtlePick 엔진 연동 실검증 메모
+- 사용자가 TurtlePick 엔진 서버를 기동했다고 알려서 `kjspringweb` 대상서버에서 엔진 방향 가능한 검증을 수행했다.
+- 엔진 health:
+  - `GET http://localhost:8081/api/health` -> HTTP 200 `UP`
+  - `GET http://localhost:8081/api/agent/health` -> HTTP 200 `UP`
+- 현재 대상서버 commit:
+  - `6e32875811200f879762478aadc73a9850d89e98`
+- 엔진 meta:
+  - full hash `POST /api/agent/meta` -> HTTP 200, `status=OK`, `methodCount=88`, `endpointCount=28`
+  - short hash `6e328758` -> HTTP 200, `status=LOG_OFF`, `reason=COMMIT_NOT_INDEXED`
+  - unknown hash -> HTTP 200, `status=LOG_OFF`, `reason=COMMIT_NOT_INDEXED`
+  - invalid payload -> HTTP 400, `INVALID_REQUEST`
+- `POST /api/git/sync` -> HTTP 200, `status=SUCCESS`, `processedCount=0`, `fromCommit/toCommit=6e328758...`
+- `kjspringweb`와 `turtlepick-agent-core` 빌드:
+  - `.\gradlew.bat bootJar` 성공
+  - `turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공
+- agent 부착 실기동:
+  - `-javaagent:...\turtlepick-agent-core-0.1.0-SNAPSHOT.jar`
+  - 임시 포트 `18081`, H2 mem DB로 기동
+  - agent stderr 기준 `method probe installed commitHash=6e328758... methodCount=88 endpointCount=28 httpInstrumentation=true`
+  - `/`, `/auth/login`, `/auth/join`, `/board` 요청은 HTTP 200 확인
+- trace 결과:
+  - `turtlepick-logs/trace-202605021610.log` 생성/갱신
+  - `/` 요청은 `HomeController#home()`으로 `endpointResolutionStatus=RESOLVED`, `endpointEntryKey=/`, `requestUri=/` 기록 확인
+  - `GreetingBatchConfig#morningGreetingJob()`, `afternoonGreetingJob()`, `cleanupGreetingJob()`은 `NO_CANDIDATE`로 기록됨. 이는 batch config method가 probe 대상에는 있으나 endpoint root 후보에는 없는 상태로 보인다.
+  - `/auth/login`은 HTTP 200이지만 trace 라인으로 확인되지 않았다. meta 응답의 `AuthController#loginPage(String,Model)`처럼 아직 FQCN 정규화 전 signature라 agent descriptor와 불일치하는 기존 blocker가 재확인됐다.
+- log-ready API:
+  - 첫 `POST /api/agent/log-ready` -> HTTP 200 `{"resultCode":"ACK"}`
+  - 순차 중복 요청 -> HTTP 200 `{"resultCode":"ALREADY_PROCESSED"}`
+  - 병렬 중복 요청 2건은 둘 다 `ACK`가 나왔다. 현재 DB unique는 `file_name` 단독이고 코드 선조회 후 insert 구조라 동시 중복 경합은 아직 완전히 닫히지 않은 것으로 보인다.
+  - invalid payload -> HTTP 400 `INVALID_REQUEST`
+- 결론:
+  - 엔진 기동/health/meta/git-sync/log-ready 기본 계약은 살아 있다.
+  - agent bootstrap과 HTTP `/` trace 귀속은 정상이다.
+  - 다음 실제 blocker는 여전히 `engine-core-private`의 `ParamTypeResolver` 기반 파라미터 타입 FQCN 정규화 반영이다.
