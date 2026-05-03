@@ -22,6 +22,8 @@ public final class TraceLogWriter {
 
     private static String loggingDir;
     private static int rollingIntervalMinutes;
+    private static String commitHash;
+    private static boolean verboseFieldNames;
     private static long currentSlot = Long.MIN_VALUE;
     private static PrintWriter writer;
     private static String currentFileName;
@@ -30,11 +32,13 @@ public final class TraceLogWriter {
     private TraceLogWriter() {
     }
 
-    public static void install(String loggingDirValue, int rollingIntervalMinutesValue) {
-        install(loggingDirValue, rollingIntervalMinutesValue, null);
-    }
-
-    public static void install(String loggingDirValue, int rollingIntervalMinutesValue, LogReadyNotifier notifier) {
+    public static void install(
+            String loggingDirValue,
+            int rollingIntervalMinutesValue,
+            String commitHashValue,
+            boolean verboseFieldNamesValue,
+            LogReadyNotifier notifier
+    ) {
         synchronized (LOCK) {
             String closedFileName = currentFileName;
             closeCurrentWriter();
@@ -42,6 +46,8 @@ public final class TraceLogWriter {
 
             loggingDir = trimToNull(loggingDirValue);
             rollingIntervalMinutes = rollingIntervalMinutesValue;
+            commitHash = trimToNull(commitHashValue);
+            verboseFieldNames = verboseFieldNamesValue;
             logReadyNotifier = notifier;
             currentSlot = Long.MIN_VALUE;
             currentFileName = null;
@@ -54,16 +60,21 @@ public final class TraceLogWriter {
                 AgentLog.warn("trace log writer disabled cause=ROLLING_INTERVAL_INVALID value=" + rollingIntervalMinutes);
                 return;
             }
+            if (commitHash == null) {
+                AgentLog.warn("trace log writer disabled cause=COMMIT_HASH_BLANK");
+                loggingDir = null;
+                return;
+            }
         }
     }
 
-    public static void write(String line) {
-        if (line == null) {
+    public static void write(RuntimeTraceContext context) {
+        if (context == null) {
             return;
         }
 
         synchronized (LOCK) {
-            if (loggingDir == null || rollingIntervalMinutes <= 0) {
+            if (loggingDir == null || rollingIntervalMinutes <= 0 || commitHash == null) {
                 return;
             }
 
@@ -77,6 +88,7 @@ public final class TraceLogWriter {
                     return;
                 }
 
+                String line = TraceLogSerializer.serialize(context, verboseFieldNames);
                 writer.println(line);
                 writer.flush();
             } catch (Throwable t) {
@@ -102,11 +114,16 @@ public final class TraceLogWriter {
 
         String nextFileName = "trace-" + FILE_NAME_FORMAT.format(Instant.ofEpochMilli(now)) + ".log";
         File targetFile = new File(directory, nextFileName);
+        boolean writeHeader = !targetFile.exists() || targetFile.length() == 0L;
         writer = new PrintWriter(new BufferedWriter(
                 new OutputStreamWriter(new FileOutputStream(targetFile, true), StandardCharsets.UTF_8)
         ));
         currentFileName = nextFileName;
         currentSlot = nextSlot;
+        if (writeHeader) {
+            writer.println(TraceLogSerializer.serializeHeader(commitHash, now, verboseFieldNames));
+            writer.flush();
+        }
     }
 
     private static void closeCurrentWriter() {

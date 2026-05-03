@@ -123,18 +123,20 @@ kjspringweb/
 
 ---
 
-## 11. 현재 상태 (2026-05-02)
+## 11. 현재 상태 (2026-05-03)
 
 - GCP 배포 상태로 동작 확인
-- TurtlePick Agent 섹터 1~7 완료 (`turtlepick-agent-core` 모듈)
+- TurtlePick Agent 섹터 1~7 완료, 섹터 8~9 미구현
 - TurtlePick Engine 로컬 기동 확인 (localhost:8081, health UP)
-- kjspringweb HEAD: `6e32875811200f879762478aadc73a9850d89e98` (엔진에 인덱싱 완료)
-- 실기동 E2E smoke 결과:
-  - `GET /` → trace RESOLVED 확인 (`HomeController#home()`)
-  - `GET /auth/login` → HTTP 200이지만 trace 누락 (FQCN 정규화 blocker)
-  - `GreetingBatchConfig#...Job()` → NO_CANDIDATE (BATCH endpoint 미구현, 정상 범위)
-- 로그 정비 완료 (`logback-spring.xml`, `.gitignore`, `application.yml`)
-- `DemoApplicationTests.java` 잔재 파일 제거 필요 (`gradlew test` 실패 원인)
+- kjspringweb HEAD: `6d45d83916e8246239d29085b5af39bd20cb1366` (엔진에 인덱싱 완료)
+- **서버 agent trace 포맷 정비 Unit 1~4 완료 (2026-05-03)**:
+  - Unit 1: 로그 포맷 재설계 (compact/verbose, 헤더 레코드, vfn 옵션)
+  - Unit 2: hasError 추적 (`e` 플래그 실제 동작)
+  - Unit 3: try/finally ASM 계측 (`error:true` E2E 검증 완료)
+  - Unit 4: 에러 메타 (errorCallId/exceptionClass/exceptionMessage, first-write-wins)
+- E2E 검증 완료: 정상 `error:false`, 예외 `error:true`, errorCallId/ec/em 정상 출력
+- Repository/DAO 계측: 엔진 meta 계약 선행 필요 → `turtlepick/docs/작업지시문_20260503.md` 작성
+- 다음 서버 단위: exceptionMessage truncate + stack trace 핵심 추출 (5단위)
 
 ---
 
@@ -167,19 +169,134 @@ kjspringweb/
 
 ---
 
-## 13. 다음 과제 (2026-05-02 기준)
+## 13. 다음 과제 (2026-05-03 기준)
+
+### 서버 agent (즉시 진행 가능)
 
 | 순위 | 작업 | 위치 |
 |------|------|------|
-| 1 | 엔진 FQCN 파라미터 정규화 (`작업지시서_20260329.md`) | turtlepick/engine-core-private |
-| 2 | 엔진 `POST /api/git/index` 추가 (commit on-demand 인덱싱) | turtlepick/engine-app |
-| 3 | DB 재인덱싱 → `/auth/login` trace RESOLVED 검증 | - |
-| 4 | Agent 8섹터: `POST /api/agent/log-ready` 전송 구현 | turtlepick-agent-core |
-| 5 | Agent 9섹터: 엔진 수거 응답 처리 | turtlepick-agent-core |
+| 1 | **5단위**: exceptionMessage truncate(max 500자) + stack trace 핵심 추출 | turtlepick-agent-core |
+| 2 | **섹터 8**: `POST /api/agent/log-ready` 전송 구현 | turtlepick-agent-core |
+| 3 | **섹터 9**: 엔진 수거 응답 처리 (파일 삭제/오프셋) | turtlepick-agent-core |
+
+### 엔진 선행 후 서버 작업
+
+| 작업 | 지시문 |
+|------|--------|
+| Repository inherited methodId 발번 계약 구현 | `turtlepick/docs/작업지시문_20260503.md` |
+| Repository AOP 계측 (DAO node 추가) | 엔진 meta 확장 후 |
+| Repository DAO args 캡처 | Repository AOP 완료 후 |
+
+### 엔진 작업
+
+| 순위 | 작업 |
+|------|------|
+| 1 | 실파일 수거/파싱/DB저장/archive/delete (stub → 실구현) |
+| 2 | Repository inherited methodId 발번 + meta 응답 확장 (`작업지시문_20260503.md`) |
 
 ---
 
-## 14. TurtlePick Engine 연동 정보 (2026-03-28)
+## 14. Trace 로그 포맷 설계 확정 (2026-05-03)
+
+### 로그 사상
+
+- 서버는 요청 흐름을 파일에만 기록. 엔진과 실시간 통신 없음
+- 엔진이 주기적으로 파일 수거 → 분석/저장/도식화
+- 서버 부담 최소, 요청 중 I/O는 파일 append만
+- 에러는 운영 자산 — 별도 철학으로 전문 저장
+
+### 파일 포맷 (확정)
+
+줄 단위 JSON (NDJSON). 파일이 닫히지 않아도 쓰인 줄까지 파싱 가능.
+
+**헤더 레코드 (파일 첫 줄, 1회만)**
+```json
+{"f":"h","v":1,"vfn":false,"c":"6d45d83...","ts":1777788119253}
+```
+
+| 키 | 의미 | 비고 |
+|----|------|------|
+| `f` | record type = `"h"` (header) | |
+| `v` | 포맷 버전 | 현재 1 |
+| `vfn` | verbose-field-names 여부 | false=compact(기본), true=풀네임 |
+| `c` | commitHash | |
+| `ts` | 파일 생성 시각 (epoch ms) | |
+
+**정상/에러 trace 레코드 (요청 1건 = 1줄)**
+```json
+{"f":"t","ep":1266277122,"e":false,"n":[{"i":1,"p":0,"m":113932304,"st":0,"et":0}]}
+```
+
+| 키 | 의미 |
+|----|------|
+| `f` | record type = `"t"` (trace) |
+| `ep` | endpointId |
+| `e` | 에러 여부 (boolean) |
+| `n` | nodes 배열 |
+
+**node 구조 (object, 배열 아님 — 스키마 진화 대응)**
+
+| 키 | 의미 |
+|----|------|
+| `i` | callId (요청 내 호출 인스턴스 증가값) |
+| `p` | parentCallId (0이면 루트) |
+| `m` | methodId |
+| `st` | trace 시작 기준 start offset ms |
+| `et` | trace 시작 기준 end offset ms |
+
+에러 시 추가 예정 (다음 단위): `a`(args), `o`(result), `q`(SQL), `r`(query_result)
+
+### verbose-field-names 옵션
+
+- 설정: `turtlepick.agent.logging.verbose-field-names=false`
+- Java 필드명: `verboseFieldNames`
+- 헤더 키: `vfn`
+- 기본값: `false` (compact) — **운영은 항상 false**
+- `true`는 개발/눈검사 전용. 엔진 파싱 보장 범위 밖
+- `vfn=true`일 때 full key 예시:
+  ```json
+  {"format":"header","version":1,"verboseFieldNames":true,"commitHash":"...","createdAt":...}
+  {"format":"trace","endpointId":1266277122,"error":false,"nodes":[{"callId":1,"parentCallId":0,"methodId":113932304,"startOffsetMs":0,"endOffsetMs":0}]}
+  ```
+
+### 에러 메타 포맷 (Unit 4 확정)
+
+에러 trace 레코드 추가 필드:
+
+| 키 (compact) | 키 (verbose) | 의미 |
+|-------------|-------------|------|
+| `eci` | `errorCallId` | 최초 예외 발생 프레임 callId (first-write-wins) |
+| `ec` | `exceptionClass` | 예외 클래스 FQCN |
+| `em` | `exceptionMessage` | 예외 메시지 (truncate 미적용, 5단위에서 처리) |
+
+`errorCallId == null`이면 `eci/ec/em` 생략. `e:false`이면 에러 필드 없음.
+
+### stack trace 핵심 추출 방향 (5단위 예정)
+
+- **방향**: root cause까지 `getCause()` 재귀 → 사용자 패키지 프레임만 필터
+- compact: `stk`, verbose: `stackTrace`
+- `turtlepick.properties`에 `base-package=com.kjweb` 설정 추가
+- 최대 10개 프레임 (고정)
+- exceptionMessage max 500자 truncate (고정, config 없이)
+
+### 미확정/보류 사항
+
+- 정상/에러 파일 분리: 현재는 `e` 플래그로 한 파일 내 구분. 파일 분리는 다음 단위
+- args/result/SQL 캡처: Repository AOP 완료 후 별도 단위
+
+### 현재 구현 vs 목표 포맷 차이
+
+| 항목 | 현재 (verbose) | 목표 (운영) |
+|------|----------------|-------------|
+| commitHash | 없음 | 파일 헤더 1회 |
+| 문자열 필드 | entryFqcnMethod 등 반복 | 제거 |
+| node 구조 | object (f=fqcnMethod 포함) | object (f 제거) |
+| 에러 여부 | 없음 | `e` 플래그 |
+| record type | 없음 | `f` 플래그 |
+
+---
+
+## 15. TurtlePick Engine 연동 정보 (2026-03-28)
 
 - 엔진 주소: `http://localhost:8081`
 - meta 엔드포인트: `POST /api/agent/meta`
@@ -201,7 +318,7 @@ kjspringweb/
 
 ---
 
-## 15. 관련 프로젝트
+## 16. 관련 프로젝트
 
 | 프로젝트 | 역할 |
 |----------|------|
@@ -211,13 +328,13 @@ kjspringweb/
 
 ---
 
-## 16. 작업 규칙 (2026-03-28)
+## 17. 작업 규칙 (2026-03-28)
 
 - CLAUDE.md 수정: Claude 자율 허용
 - 나머지 파일 수정: 금지 (오빠 명시적 지시 시에만)
 - Claude 역할: GPT 제안 딴지/보완안 채팅 제시만
 - 코드 수정 실행: GPT(Codex) 담당
 
-## 17. 작업 프로토콜
+## 18. 작업 프로토콜
 
 `work_protocol.md` 참고 (GPT + Claude 핑퐁 방식 동일 적용)

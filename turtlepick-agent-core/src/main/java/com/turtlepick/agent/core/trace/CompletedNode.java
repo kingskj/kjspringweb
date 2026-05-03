@@ -1,19 +1,28 @@
 package com.turtlepick.agent.core.trace;
 
-public final class MethodFrame {
+public final class CompletedNode {
 
     private final int callId;
     private final int parentCallId;
     private final int methodId;
     private final String fqcnMethod;
-    private final long startNanoTime;
+    private final long startOffsetMs;
+    private final long endOffsetMs;
 
-    public MethodFrame(int callId, int parentCallId, int methodId, String fqcnMethod, long startNanoTime) {
+    public CompletedNode(
+            int callId,
+            int parentCallId,
+            int methodId,
+            String fqcnMethod,
+            long startOffsetMs,
+            long endOffsetMs
+    ) {
         this.callId = callId;
         this.parentCallId = parentCallId;
         this.methodId = methodId;
         this.fqcnMethod = fqcnMethod;
-        this.startNanoTime = startNanoTime;
+        this.startOffsetMs = startOffsetMs;
+        this.endOffsetMs = endOffsetMs;
     }
 
     public int getCallId() {
@@ -32,7 +41,11 @@ public final class MethodFrame {
         return fqcnMethod;
     }
 
-    public long getStartNanoTime() {
-        return startNanoTime;
+    public long getStartOffsetMs() {
+        return startOffsetMs;
+    }
+
+    public long getEndOffsetMs() {
+        return endOffsetMs;
     }
 }

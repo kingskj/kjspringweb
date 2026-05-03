@@ -1061,3 +1061,557 @@
   - 현대 Spring Boot 대상서버 검증과 레거시 Spring 검증은 섞지 않는다.
   - 레거시 Spring 검증은 필요 시 별도 대상 서버 프로젝트로 분리한다.
   - 특수 업무 entry는 자동 광역 스캔보다 config의 FQCN 명시(`instrumentation.ast.extra-entry-classes`)를 우선 고려한다.
+
+## 89) 2026-05-03 TurtlePick 대상서버/엔진 문서 및 프로젝트 재분석 메모
+- 사용자 요청에 따라 `D:\workspace\turtlepick`의 `README.md`, `gpt.md`, `CLAUDE.md`, `docs/*.md`와 현재 `kjspringweb`의 `gpt.md`, `work_protocol.md`, `CLAUDE.md`, `docs/*.md`를 다시 읽고 실제 코드 구조를 대조했다.
+- 이번 턴은 분석 중심이며, 코드/문서 직접 수정은 이 맥락 메모(`gpt.md`) 외에는 수행하지 않았다.
+- 현재 `kjspringweb` HEAD는 `6d45d83916e8246239d29085b5af39bd20cb1366`, branch는 `work`다. git status 기준 추적되지 않은 `.claude/`만 보인다.
+- 현재 `turtlepick` HEAD는 `dfaa9a4f04be89a0e094f099957f27b7ddb70498`, branch는 `work`다. git status 기준 `.claude/`가 추적되지 않았고, `agent-log-ready-e2e/*`, `server-engine-realtest/*`의 추적 파일 삭제 상태가 보인다.
+- `kjspringweb`는 Spring Boot 4.0.2 + Java 17 + Thymeleaf + Security + JPA/H2 + Batch 구조이며, 테스트 목적상 서버/DB 제약과 배치 강제 오류로 관측 지점을 만드는 대상 서버다.
+- `kjspringweb/turtlepick-agent-core`는 Java 8 호환 `javaagent` 모듈로, meta handshake, ASM method probe, Spring MVC HTTP context hook, endpoint resolver, trace writer/rolling, log-ready notifier까지 코드상 존재한다.
+- agent 설정에는 SQL 계측 on/off 항목이 있지만, 현재 코드 검색 기준 datasource-proxy/MyBatis 실제 계측 구현은 아직 보이지 않는다. 현재 검증된 핵심 경로는 HTTP method trace + file rolling + log-ready 전송이다.
+- `turtlepick` 엔진은 `engine-app`, `engine-core-private` 2모듈 구조다. `/api/agent/meta`, `/api/git/sync`, `/api/agent/log-ready`, startup resume 1회 전송, SQLite schema init, Git sync/AST 분석이 구현되어 있다.
+- 2026-05-02 엔진 쪽 `ParamTypeResolver` 반영으로 과거 blocker였던 `String,Model` vs `java.lang.String,org.springframework.ui.Model` signature 불일치는 문서와 코드 기준 해결 상태다.
+- 2026-05-02 E2E 문서 기준 `/auth/login`은 `endpointResolutionStatus=RESOLVED`로 검증됐고, agent log-ready도 `ACK`까지 확인됐다.
+- 현재 남은 1순위 구현 공백은 엔진 `LogReadyService`/`LogFileProcessor`의 실제 파일 I/O다. `checkSourceFileExistsStub`, `readLogFileStub`, `storeDailyTempStub`, `deleteSourceFileStub`가 여전히 stub이다.
+- 후속 공백: trace ndjson 파싱/DB 저장/archive/delete/error 이동, 수거 실패 시 LOG_OFF 전환, `/agent/resume` 수신 및 re-meta 경로, branch-agnostic/on-demand commit indexing.
+- `kjspringweb`의 `src/test/java/com/example/demo/DemoApplicationTests.java`는 여전히 `com.example.demo` 패키지 잔재로 남아 있어 `gradlew test` 실패 원인 후보가 유지된다.
+- 현재 `MemberController` 기본 경로는 `/member`이며 profile/withdraw는 `/member/profile`, `/member/withdraw`다. 과거 문서의 `/profile`, `/withdraw` 단독 표기는 최신 코드와 다르다.
+
+## 90) 2026-05-03 서버 agent trace nodes[] 적재 반영
+- 오늘은 기존 GPT 선제안/Claude 딴지 패턴을 반대로 진행했다. Claude가 서버 agent 로그 적재 확장안을 제안하고, GPT가 `methodId`를 node 식별자로 쓰면 안 된다는 딴지를 걸어 `callId/parentCallId/methodId` 구조로 보정했다.
+- 반영 범위:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/MethodFrame.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/CompletedNode.java` 신규
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeTraceContext.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogSerializer.java`
+  - `docs/h202605031414.md` 작업 일지 신규
+- 핵심 변경:
+  - 요청 단위 `RuntimeTraceContext`가 `nextCallId`, `traceStartNanoTime`, 완료 node 목록을 관리한다.
+  - `MethodFrame`에 `callId`, `parentCallId`를 추가했다.
+  - method exit 시 `CompletedNode(callId,parentCallId,methodId,fqcnMethod,startOffsetMs,endOffsetMs)`를 누적한다.
+  - trace JSON에 `nodes[]`를 추가하고, 각 node는 `i`, `p`, `m`, `f`, `st`, `et` 필드로 출력한다.
+  - `nodes[]`는 `callId` 오름차순으로 직렬화한다.
+  - `error` 전문/args/result/sql 캡처는 이번 단위에서 제외했다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+  - `D:\workspace\kjspringweb`에서 `.\gradlew.bat bootJar` 성공.
+  - engine health `http://localhost:8081/api/health`, `http://localhost:8081/api/agent/health` 모두 HTTP 200 UP 확인.
+  - 현재 commit `6d45d83916e8246239d29085b5af39bd20cb1366`에 대해 `/api/agent/meta` HTTP 200 `status=OK` 확인.
+  - agent 부착 임시 서버를 `localhost:18085`로 기동 후 `GET /board` HTTP 200 확인.
+  - `turtlepick-logs/trace-202605031412.log`에서 `/board` trace에 `nodes[]` 확인:
+    - node 1: `p=0`, `BoardController#list(...)`
+    - node 2: `p=1`, `BoardService#getList(...)`
+- 임시 기동 산출물은 `logs/smoke/agent-chain-20260503141242.out.log`, `logs/smoke/agent-chain-20260503141242.err.log`에 저장했다.
+- E2E 임시 Java 프로세스는 검증 후 종료했다.
+- 다음 논점:
+  - 엔진 실파일 수거/파싱 전에 trace `nodes[]` 포맷을 엔진 파서 입력 계약으로 고정할지 검토.
+  - 이후 args/result/sql/error 전문 캡처는 별도 섹터로 분리해서 진행한다.
+
+## 91) 2026-05-03 파일 수정 권한 규칙 재확인
+- 사용자 최신 지시:
+  - `gpt.md`는 Codex가 맥락 유지용으로 권한 요청 없이 자유롭게 수정 가능하다.
+  - 그 외 모든 파일은 사용자가 직접 지시하지 않으면 절대 손대지 않는다.
+- 이번 턴의 `docs/h202605031414.md` 자동 작성은 사용자 명시 없이 범위를 넘긴 과잉 반영이었다.
+- 이후 종료 일지/docs/CLAUDE.md/코드/설정 파일 등은 사용자의 명시 지시 전에는 생성/수정/삭제하지 않는다.
+- 단, 사용자가 명시적으로 코드 반영을 지시한 범위의 파일만 수정한다.
+
+## 92) 2026-05-03 로그 적재 사상 재확인
+- 사용자 사상 기준으로 프로젝트에 지속적으로 쌓이는 로그 종류는 2개만 둔다.
+  1. 서버 자체 범용 로그
+     - 사용자의 운영 환경에 따라 각자 커스텀하는 일반 서버 로그.
+     - 보통 에러 중심 운영 로그이며, TurtlePick 수거 대상이 아니다.
+  2. TurtlePick agent trace 로그
+     - 엔진 전달/수거를 위한 TurtlePick 전용 로그.
+     - 엔진이 주기적으로 수거하고, 수거 완료 후 TurtlePick이 삭제한다.
+- `logs/smoke`, `logs/runtime` 같은 수동 검증 stdout/stderr 산출물은 장기적으로 쌓이는 세 번째 로그 체계가 되면 안 된다.
+- 향후 수동 smoke/E2E 검증 시에는 루트나 `logs/` 하위에 검증 산출물을 누적하지 않는 방향으로 처리한다.
+- 이미 존재하는 파일 삭제/정리는 사용자 명시 지시가 있을 때만 수행한다.
+
+## 93) 2026-05-03 서버 로그와 TurtlePick 로그 경로 분리 원칙
+- 서버 자체 운영 로그와 TurtlePick agent trace 로그는 폴더 경로도 반드시 분리한다.
+- 서버 자체 운영 로그:
+  - 대상 서버가 자체 운영/장애 확인을 위해 남기는 범용 로그 경로.
+  - 고객/사용자 환경에서 직접 커스텀하는 영역이다.
+  - TurtlePick 엔진 수거 대상이 아니다.
+- TurtlePick agent trace 로그:
+  - 대상 서버 쪽에 기록되는 TurtlePick 전용 trace spool 경로가 따로 있어야 한다.
+  - 엔진 쪽에도 수거/임시저장/archive/error 등 TurtlePick 전용 로그/저장 경로가 따로 있어야 한다.
+  - 이 경로들은 서버 자체 운영 로그 경로와 섞이면 안 된다.
+  - 엔진 수거 성공 후 대상 서버 쪽 TurtlePick trace 파일은 TurtlePick이 삭제한다.
+- 향후 검증/기동 스크립트 작성 시 stdout/stderr 임시 산출물을 서버 운영 로그 경로나 TurtlePick trace spool 경로에 섞지 않는다.
+
+## 94) 2026-05-03 TurtlePick trace 기본 포맷 정비 기준
+- 현재 구현된 trace JSON(`traceId`, `entryFqcnMethod`, `requestUri`, `endpointResolutionStatus`, node 내부 `f=fqcnMethod` 등)은 "로그가 찍힌다"는 확인용 중간물일 뿐, TurtlePick 로그 설계 사상이 반영된 최종 포맷이 아니다.
+- 사용자 판단 기준으로 현재 포맷은 운영/엔진 수거용 로그라기보다 초급 디버그 로그에 가까우며, 서버 trace 적재를 계속 진행하기 전에 기본 포맷 정비가 먼저 필요하다.
+- 이번 정리는 최종 에러 로그 설계가 아니라, 정상/기본 trace 파일을 TurtlePick 사상에 맞게 최소화하는 기준이다.
+
+### 기본 원칙
+- trace 파일은 줄 단위로 완결되는 JSON 레코드 형식을 유지한다. 파일 전체가 하나의 JSON object일 필요는 없으며, 파일이 닫히지 않아도 이미 기록된 줄까지 엔진이 파싱 가능해야 한다.
+- 파일 첫 줄은 header 레코드다. `commitHash`, `createdAt`, 포맷 버전, verbose 여부 같은 파일 단위 정보는 여기 한 번만 기록하고 요청 레코드마다 반복하지 않는다.
+- 요청 레코드는 엔진 역참조가 가능한 ID 기반 최소 필드만 가진다. 기본 배포 포맷에서는 메서드 풀네임, request URI, endpoint entry key 같은 문자열 디버그 필드를 넣지 않는다.
+- node는 배열이 아니라 object로 둔다. 배열(`[1,0,113932304,0,0]`)은 용량은 작지만 필드 추가 시 파서가 깨지기 쉬우므로, 아직 스키마가 확정되지 않은 현재 단계에서는 object가 더 안전하다.
+- 정상/에러 파일 분리는 이번 단위에서 하지 않는다. 같은 trace 파일 안에서 요청 레코드의 `e` 플래그로 구분하고, 엔진 파싱/보관 단계에서 error/archive 분기를 다룬다.
+- `err` 블록, args/result/sql/stack/source snapshot 등 에러 전문 구조는 이번 기본 포맷 정비 범위 밖이다. 다음 에러 로그 단위에서 별도 설계한다.
+
+### verbose field names 옵션
+- 보기 편한 디버깅용 항목명 풀네임 옵션명은 `verbose-field-names`로 정한다.
+- 서버 agent 설정명:
+  - `turtlepick.agent.logging.verbose-field-names=false`
+- Java 필드명 후보:
+  - `verboseFieldNames`
+- 파일 헤더 축약 필드:
+  - `vfn` = verbose field names
+- 기본값은 `false`다. 배포/운영 기준은 최소화 포맷이며, verbose는 개발 중 눈으로 확인하기 위한 보조 옵션이다.
+- 엔진에는 별도 `verbose-field-names` config를 두지 않는다. 엔진은 파일 헤더의 `vfn` 값을 보고 이후 레코드 파서 모드를 자동 선택한다.
+- header는 자기 자신을 설명해야 하므로 항상 short key로 고정한다. 본문 레코드만 `vfn` 값에 따라 short/verbose field name을 선택한다.
+
+### compact 기본 포맷 후보
+```json
+{"f":"h","v":1,"vfn":false,"c":"6d45d83...","ts":1777788119253}
+{"f":"t","ep":1266277122,"e":false,"n":[{"i":1,"p":0,"m":113932304,"st":0,"et":0}]}
+```
+
+- header:
+  - `f`: record type. `h` = header.
+  - `v`: trace file format version.
+  - `vfn`: verbose field names 여부.
+  - `c`: commit hash.
+  - `ts`: file createdAt epoch milliseconds.
+- trace:
+  - `f`: record type. `t` = trace/request.
+  - `ep`: endpoint id.
+  - `e`: request context 안에서 어느 method든 `RuntimeMethodBridge.exit(methodId, error=true)`가 한 번이라도 호출되었는지 여부.
+  - `n`: completed method node 목록.
+- node:
+  - `i`: call id.
+  - `p`: parent call id. root는 0.
+  - `m`: method id.
+  - `st`: trace 시작 기준 start offset ms.
+  - `et`: trace 시작 기준 end offset ms.
+
+### verbose 본문 포맷 후보
+```json
+{"f":"h","v":1,"vfn":true,"c":"6d45d83...","ts":1777788119253}
+{"format":"trace","endpointId":1266277122,"error":false,"nodes":[{"callId":1,"parentCallId":0,"methodId":113932304,"startOffsetMs":0,"endOffsetMs":0}]}
+```
+
+- verbose는 디버깅용일 뿐이며 제품/배포 기준은 `vfn=false` compact 포맷이다.
+- `full-name` 계열 명칭은 메서드 FQCN/full method name과 혼동될 수 있으므로 사용하지 않는다.
+
+### `e` 플래그 계약
+- `e=true`는 HTTP status 기준이 아니다.
+- `e=true`는 root method 기준도 아니다. `@ControllerAdvice`, 내부 catch/retry 등으로 최종 응답이 200/302가 되어도 내부 예외 흔적이 있으면 관측해야 한다.
+- 계약:
+  - 요청 context 안에서 어느 깊이의 method든 `RuntimeMethodBridge.exit(methodId, error=true)`가 한 번이라도 호출되면 `e=true`.
+- 현재 `ignoredError`로 둔 파라미터는 기본 포맷 정비 시 `hasError` 누적으로 되살려야 한다.
+- 단, 예외 전파/try-finally 계측 안정화와 `err` 전문 기록은 별도 후속 단위다.
+
+### 파싱 실패 처리
+- 개별 파일의 header 파싱 실패, 미지원 `v`, 누락/타입 이상 `vfn` 등은 서버 LOG_OFF 전환 사유가 아니라 파일 단위 실패로 본다.
+- 엔진은 해당 파일을 `FAILED` 처리하고 warn 로그를 남긴다. 원본 유지 또는 error-dir 이동은 엔진 파일 I/O/파싱 구현 단위에서 결정한다.
+- LOG_OFF는 개별 파일 포맷 문제보다 넓은 구조적 수거 불능 상태에서 별도 판단한다.
+
+## 95) 2026-05-03 trace 기본 포맷 전환 1단위 반영
+- 사용자 지시에 따라 1단위로 `TraceLogSerializer + TraceLogWriter` 기본 포맷 전환을 반영했다.
+- 반영 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/config/AgentConfig.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/config/TurtlepickConfigLoader.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/AgentPremain.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogWriter.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogSerializer.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+- `turtlepick.agent.logging.verbose-field-names` 설정을 추가했고 기본값은 `false`다.
+- `TraceLogWriter.install(...)`는 단일 시그니처로 정리했다:
+  - `loggingDir`
+  - `rollingIntervalMinutes`
+  - `commitHash`
+  - `verboseFieldNames`
+  - `LogReadyNotifier`
+- `AgentPremain`에서 bootstrap 결과의 `commitHash`와 config의 `verboseFieldNames`를 writer에 전달한다.
+- trace 파일이 새로 열릴 때 첫 줄에 header를 쓴다. 기존 파일이 이미 있고 내용이 있으면 append 모드 특성상 헤더를 중복으로 쓰지 않는다.
+- header 포맷:
+```json
+{"f":"h","v":1,"vfn":false,"c":"6d45d83...","ts":1777788119253}
+```
+- 요청 레코드 compact 포맷:
+```json
+{"f":"t","ep":1266277122,"e":false,"n":[{"i":1,"p":0,"m":113932304,"st":0,"et":0}]}
+```
+- 요청 레코드 verbose 포맷:
+```json
+{"format":"trace","endpointId":1266277122,"error":false,"nodes":[{"callId":1,"parentCallId":0,"methodId":113932304,"startOffsetMs":0,"endOffsetMs":0}]}
+```
+- 기존 `timestampMs`는 요청 레코드에서 제거했고, `RuntimeMethodBridge`의 `System.currentTimeMillis()` 호출도 제거했다.
+- 이번 단위에서 `e`는 `false` 고정이다. `hasError` 누적과 예외 전파/try-finally 안정화는 2단위로 분리한다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+
+## 96) 2026-05-03 trace hasError 2단위 반영
+- 사용자 `확정 반영` 지시에 따라 trace 요청 레코드의 에러 플래그를 실제 `RuntimeTraceContext` 상태와 연결했다.
+- 반영 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeTraceContext.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogSerializer.java`
+- `RuntimeTraceContext`에 `hasError` 필드를 추가하고 `markError()`, `hasError()` 메서드를 추가했다.
+- `clear()`에서 `hasError=false` 리셋을 추가했다.
+- `RuntimeMethodBridge.exit(int methodId, boolean isError)`에서 stack mismatch 검사를 통과한 뒤 `isError=true`이면 `context.markError()`를 호출한다.
+- compact trace의 `e`, verbose trace의 `error`는 더 이상 false 고정이 아니라 `context.hasError()` 실제값을 쓴다.
+- 계약:
+  - 요청 context 안에서 어느 깊이의 method든 `exit(..., true)`가 한 번이라도 호출되면 요청 레코드는 `e=true`/`error=true`.
+  - HTTP status 기준이 아니며 root method 기준도 아니다.
+- 이번 단위는 에러 여부 플래그만 연결한다. `err` 블록, stack, args/result/sql, error_call_id, try-finally 계측 안정화는 후속 단위다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+
+## 97) 2026-05-03 try/finally 기반 exit 보장 3단위 반영
+- 사용자 `확정 반영` 지시에 따라 예외 전파 시 trace stack이 닫히지 않는 문제를 해결하기 위한 3단위를 반영했다.
+- 배경:
+  - 기존 `AdviceAdapter.onMethodExit(ATHROW)` 방식은 해당 프레임에서 직접 `ATHROW` opcode가 실행될 때만 `exit(..., true)`가 호출된다.
+  - 하위 메서드에서 올라온 예외가 프레임을 관통하는 경우 root frame이 닫히지 않아 `context.isEmpty()`가 되지 않고 trace flush가 누락됐다.
+- 반영 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/instrument/MethodProbeAdviceAdapter.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+- `MethodProbeAdviceAdapter` 변경:
+  - 필드 레벨 `startLabel`, `endLabel`, `handlerLabel`을 추가했다.
+  - `visitCode()`에서 try-catch block을 먼저 등록하고 `super.visitCode()`를 호출한다.
+  - `onMethodEnter()`는 `enter(methodId, fqcnMethod)` 호출 후 `startLabel`을 찍어 `enter()`를 try 범위 밖에 둔다.
+  - `onMethodExit()`는 `opcode == ATHROW`일 때 아무것도 하지 않아 double-exit을 방지한다.
+  - 정상 return 계열에서만 `exit(methodId, false)`를 호출한다.
+  - catch handler에서는 스택의 예외를 `newLocal(Throwable)`로 확보한 local slot에 저장한 뒤 `exit(methodId, true)`를 호출하고, 예외를 다시 로드해 `ATHROW`로 재전파한다.
+- `RuntimeMethodBridge` 변경:
+  - public `exit(int methodId, boolean isError)`를 throw-free wrapper로 만들고 기존 로직은 `exitUnsafe(...)`로 분리했다.
+  - bridge 내부 실패 시 warn 로그 후 `TraceContextHolder.clear()`로 정리한다.
+- 전제:
+  - `ApplicationMethodTransformer`는 이미 `ClassWriter.COMPUTE_FRAMES`와 `ClassReader.EXPAND_FRAMES`를 사용 중이라 catch block 추가에 필요한 frame 재계산 전제는 충족되어 있다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+  - 새 agent jar를 붙인 서버 재기동 후 `error:true` trace 검증은 아직 미실행이다.
+
+## 98) 2026-05-03 예외 기본 메타 4단위 반영
+- 사용자 `확정 반영` 지시에 따라 에러 trace 레코드에 stack trace 전 단계의 기본 예외 메타를 추가했다.
+- 반영 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/instrument/MethodProbeAdviceAdapter.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeTraceContext.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogSerializer.java`
+- `MethodProbeAdviceAdapter`:
+  - `EXIT_THROWABLE_DESC = (int, Throwable)void` 시그니처를 추가했다.
+  - catch handler에서 예외 local을 `exit(methodId, Throwable)`로 전달한다.
+- `RuntimeMethodBridge`:
+  - `exit(int methodId, Throwable throwable)` overload를 추가했다.
+  - Throwable은 context에 오래 보관하지 않고 class name/message 문자열로 변환해 저장한다.
+- `RuntimeTraceContext`:
+  - `errorCallId`, `exceptionClass`, `exceptionMessage` 필드를 추가했다.
+  - `markError(int callId, String exceptionClass, String exceptionMessage)`는 first-write-wins로 동작한다. 예외 전파 과정에서 service/controller/root frame이 뒤늦게 들어와도 최초 깊은 frame의 에러 메타를 덮지 않는다.
+  - `clear()`에서 에러 메타를 리셋한다.
+- `TraceLogSerializer`:
+  - compact 에러 필드: `eci`, `ec`, `em`
+  - verbose 에러 필드: `errorCallId`, `exceptionClass`, `exceptionMessage`
+  - `e=false`/`error=false` 또는 `errorCallId`가 없으면 에러 메타 필드는 출력하지 않는다.
+- 이번 단위는 stack trace, args/result/sql, source snapshot을 포함하지 않는다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+  - 새 agent jar를 붙인 서버 재기동 후 런타임 trace 검증은 아직 미실행이다.
+
+## 99) 2026-05-03 Repository/DAO node 및 args 캡처 TODO
+- 오늘은 서버 agent trace 포맷/에러 플래그/예외 기본 메타까지 서버 쪽을 우선 진행한다.
+- DB duplicate 테스트 결과:
+  - `POST /auth/join`에 기존 `user1@kjweb.com`으로 요청 시 `DataIntegrityViolationException`이 trace에 기록됐다.
+  - 현재 trace는 Controller -> Service node까지만 있고, Repository/DAO node는 없다.
+- 현재 JPA 흐름:
+  - `AuthController.join()`
+  - `MemberService.join()`
+  - `memberRepository.save(member)`
+  - Hibernate insert
+  - `DataIntegrityViolationException`
+- DAO/Repository node가 필요한 이유:
+  - Service 안에서 파라미터를 바꿔 같은 DAO를 여러 번 호출할 수 있다.
+  - Service node만 있으면 어떤 Repository 호출이 어떤 파라미터로 실패했는지 추적할 수 없다.
+  - SQL 전문을 바로 찍지 않더라도 Repository/DAO method node와 args는 필요하다.
+- 현재 서버 agent만으로 Repository node를 바로 추가할 수 없는 이유:
+  - `MemberRepository#save(Member)`는 git 소스에 직접 선언된 메서드가 아니라 Spring Data inherited method다.
+  - 기존 엔진 AST 기반 methodId 발번 체계에는 inherited Repository methodId가 없다.
+  - 서버가 임시 해시를 자체 생성하면 엔진 DB/method registry와 불일치한다.
+- Repository/DAO node 작업은 엔진 계약 선행 후 서버로 돌아와야 한다.
+
+### 엔진/서버 계약 TODO
+- meta request에 `repositories[]` 추가:
+```json
+{
+  "owner": "com.kjweb.domain.repository.MemberRepository",
+  "domainType": "com.kjweb.domain.entity.Member",
+  "idType": "java.lang.Long"
+}
+```
+- 엔진은 `repositories[]` 기반으로 inherited methodId를 발번하고 DB에 저장한다.
+- methodId hash input 후보:
+```text
+REPOSITORY_INHERITED|{owner}#{method}({semanticParams})
+```
+- owner는 `CrudRepository`가 아니라 실제 Repository 인터페이스 FQCN이어야 한다.
+- `inheritedFrom`은 별도 메타 필드로 기록한다.
+- meta response에는 기존 `methods[]`와 별도로 `repositoryMethods[]`를 추가한다.
+- 서버 agent는 `repositoryMethods[]`를 별도 registry에 적재한다.
+- runtime matching key 후보:
+```text
+(owner, methodName, runtimeParams) -> methodId
+```
+
+### Repository inherited MVP 후보
+| method | semantic params | runtimeParams |
+|---|---|---|
+| save | `[domainType]` | `[java.lang.Object]` |
+| saveAll | `[java.lang.Iterable]` | `[java.lang.Iterable]` |
+| findById | `[idType]` | `[java.lang.Object]` |
+| findAll | `[]` | `[]` |
+| delete | `[domainType]` | `[java.lang.Object]` |
+| deleteById | `[idType]` | `[java.lang.Object]` |
+| existsById | `[idType]` | `[java.lang.Object]` |
+| count | `[]` | `[]` |
+
+### 서버 후속 TODO
+- 엔진에서 `repositoryMethods[]` 계약이 완료되면 서버 agent로 돌아와 Repository AOP를 구현한다.
+- Repository AOP는 Spring proxy 계층에서 Repository 호출을 감싸 node를 추가한다.
+- 그 다음 단위로 DAO/Repository args 캡처를 추가한다.
+- Repository bean은 proxy일 수 있으므로 owner/domainType/idType 추출 시 실제 Repository 인터페이스를 찾아야 한다.
+  - 후보 API: `AopUtils.getTargetClass(bean)`, `ClassUtils.getAllInterfacesForClass(bean.getClass())`
+  - owner는 proxy class명이 아니라 실제 Repository 인터페이스 FQCN이어야 한다.
+- `REPOSITORY_DECLARED` 사용자 정의 쿼리 메서드는 이번 TODO 범위 밖이며, 기존 scanner 포함 여부도 별도 확인 대상이다.
+
+## 100) 2026-05-03 예외 핵심 메타 정제 5단위 반영
+- 사용자 `확정 반영` 지시에 따라 에러 trace의 `exceptionMessage` 과다 출력 문제를 줄이고, 실제 사용자 코드 위치를 추출하는 5단위를 반영했다.
+- 목표:
+  - raw stack trace 20줄을 그대로 찍지 않는다.
+  - 예외 종류별 하드코딩 없이 공통 추출 규칙으로 핵심만 남긴다.
+  - outer exception, root cause, 사용자 패키지 frame을 분리한다.
+- 신규 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/UserFrame.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/ErrorMeta.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/ErrorMetaExtractor.java`
+- 변경 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/config/AgentConfig.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/config/TurtlepickConfigLoader.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/AgentPremain.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeTraceContext.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogSerializer.java`
+  - `turtlepick.properties`
+- 설정:
+```properties
+turtlepick.agent.error.user-frame-packages=com.kjweb
+```
+- `ErrorMetaExtractor` 동작:
+  - `exceptionMessage`, `rootExceptionMessage`는 500자 고정 truncate.
+  - cause chain은 outer -> root로 만든 뒤 user frame 수집은 root -> outer 순서로 수행한다.
+  - `user-frame-packages`에 포함된 사용자 패키지 frame만 수집한다.
+  - `(className, methodName, lineNumber)` 기준으로 중복 제거한다.
+  - user frame은 최대 10개만 저장한다.
+- trace 출력:
+  - compact:
+    - 기존 `eci/ec/em`
+    - root가 outer와 다를 때만 `rc/rm`
+    - user frame이 있을 때만 `uf`
+  - verbose:
+    - 기존 `errorCallId/exceptionClass/exceptionMessage`
+    - root가 outer와 다를 때만 `rootExceptionClass/rootExceptionMessage`
+    - user frame이 있을 때만 `userFrames`
+- `RuntimeTraceContext.markError(callId, ErrorMeta)`는 기존처럼 first-write-wins를 유지한다.
+  - 예외가 Service -> Controller 방향으로 전파되어도 최초 깊은 frame의 `errorCallId`와 에러 메타를 덮지 않는다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+- 미검증:
+  - 새 jar로 서버 재기동 후 duplicate DB 에러에서 `rootExceptionClass/rootExceptionMessage/userFrames`가 실제 trace에 찍히는지 런타임 확인 필요.
+
+## 101) 2026-05-03 5단위 에러 trace 런타임 검증
+- 새 agent jar가 붙은 서버에서 에러 요청을 여러 개 보냈다.
+- 정상 요청:
+  - `GET /`
+  - `GET /board`
+- 에러 요청:
+  - `GET /board/999999999`
+  - `GET /board?page=-1`
+  - CSRF 포함 `POST /auth/join` duplicate member (`user1@kjweb.com`)
+- 확인 파일:
+  - `turtlepick-logs/trace-202605032018.log`
+  - `turtlepick-logs/trace-202605032019.log`
+- 확인 결과:
+  - `CustomAppException` 케이스에서 `userFrames`가 출력됐다.
+    - `BoardService#getDetail`
+    - `BoardController#detail`
+  - `IllegalArgumentException` 케이스에서 `userFrames`가 출력됐다.
+    - `BoardController#list`
+  - DB duplicate 케이스에서 `exceptionMessage`가 500자 truncate됐다.
+  - DB duplicate 케이스에서 root cause가 분리 출력됐다.
+    - outer: `org.springframework.dao.DataIntegrityViolationException`
+    - root: `org.h2.jdbc.JdbcSQLIntegrityConstraintViolationException`
+  - DB duplicate 케이스에서 `userFrames`가 출력됐다.
+    - `MemberService#join`
+    - `AuthController#join`
+- admin API null batch는 인증/CSRF 문제로 403이 떠서 이번 trace 검증 대상에서 제외했다.
+- 현재 5단위 목표였던 `em truncate + root cause + userFrames`는 런타임 trace에서 확인됐다.
+
+## 102) 2026-05-03 userFrames 프록시/비소스 frame 제거
+- 사용자 `확정 반영` 지시에 따라 `userFrames`에서 Spring CGLIB proxy frame과 source line이 없는 frame을 제외했다.
+- 배경:
+  - duplicate DB 에러 trace에서 아래 frame이 출력됐다.
+```json
+{"className":"com.kjweb.web.service.MemberService$$SpringCGLIB$$0","methodName":"join","lineNumber":-1}
+```
+  - `com.kjweb`로 시작해서 기존 패키지 필터를 통과했지만 실제 사용자 소스 위치가 아니라 노이즈다.
+- 반영 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/ErrorMetaExtractor.java`
+- 반영 정책:
+  - `className`에 `$$`가 포함되면 제외한다.
+  - `lineNumber < 0`이면 제외한다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+- 미검증:
+  - 새 jar로 서버 재기동 후 duplicate DB 에러에서 `MemberService$$SpringCGLIB$$0`가 빠지는지 런타임 재확인 필요.
+
+## 103) 2026-05-03 userFrames 프록시 제거 런타임 검증
+- 새 agent jar로 서버 재기동 후 CSRF 포함 duplicate join 요청을 보냈다.
+- 요청:
+  - `POST /auth/join`
+  - `username=user1`
+  - `email=user1@kjweb.com`
+- 확인 파일:
+  - `turtlepick-logs/trace-202605032027.log`
+- 확인 결과:
+  - `userFrames`에서 `MemberService$$SpringCGLIB$$0`가 제거됐다.
+  - `lineNumber:-1` frame도 출력되지 않았다.
+  - 남은 userFrames:
+```json
+[
+  {"className":"com.kjweb.web.service.MemberService","methodName":"join","lineNumber":47},
+  {"className":"com.kjweb.web.controller.AuthController","methodName":"join","lineNumber":35}
+]
+```
+
+## 104) 2026-05-03 Unit 6 에러 지점 args 캡처 반영
+- 사용자 `확정 반영` 지시에 따라 에러 경로에서만 method parameter args를 캡처하는 Unit 6을 반영했다.
+- 서버 agent 원칙:
+  - 서버 agent는 민감정보 암호화/마스킹/난독화/압축을 하지 않는다.
+  - 엔진이 trace 파일을 수거/해석한 뒤 저장 직전 단계에서 암호화/마스킹/난독화/압축을 처리한다.
+  - 서버 agent는 원본 관측성 보존을 우선하되, 위험 타입 exclude와 길이 상한으로 사고성 로그 폭주만 방지한다.
+- 신규 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/ErrorArgCaptureOptions.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/ErrorArgExtractor.java`
+- 변경 파일:
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/instrument/MethodProbeAdviceAdapter.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeMethodBridge.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/RuntimeTraceContext.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/trace/TraceLogSerializer.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/config/AgentConfig.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/config/TurtlepickConfigLoader.java`
+  - `turtlepick-agent-core/src/main/java/com/turtlepick/agent/core/AgentPremain.java`
+  - `turtlepick.properties`
+- ASM:
+  - catch handler에서 `loadArgArray()`로 원본 method args를 `Object[]`로 만든다.
+  - `RuntimeMethodBridge.exit(int, Throwable, Object[])`로 전달한다.
+  - 기존 `exit(int, Throwable)`와 `EXIT_THROWABLE_DESC`는 제거했다.
+- Runtime:
+  - `Object[]` 원본은 context에 저장하지 않는다.
+  - `ErrorArgExtractor`가 즉시 `String[]` snapshot으로 변환한다.
+  - `RuntimeTraceContext`는 `String[] errorArgs`만 방어 복사해 first-write-wins로 저장한다.
+- serializer:
+  - compact: `ea`
+  - verbose: `errorArgs`
+  - args가 null/empty면 필드를 생략한다.
+- config:
+```properties
+turtlepick.agent.error.args.enabled=true
+turtlepick.agent.error.args.max-length=10000
+turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,java.io.File,java.nio.ByteBuffer,org.springframework.web.multipart.MultipartFile,byte[],char[]
+```
+- `max-length=0`은 무제한이다.
+- `enabled=false`면 args 캡처를 끈다.
+- 기본 exclude 목록은 `AgentConfig.defaultErrorArgsExcludeClasses()`에서 제공한다.
+  - `byte[]` -> `[B`
+  - `char[]` -> `[C`
+  - alias 변환은 `TurtlepickConfigLoader`에서 수행한다.
+- 후속 TODO:
+  - Kafka/Batch/ETL/대용량 동기 인터페이스는 entry-type 또는 method rule 기반 별도 args 정책을 설계한다.
+  - 일반 HTTP/service args는 기본적으로 원본 보존 방향을 유지한다.
+- 검증:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+- 미검증:
+  - 서버 재기동 후 verbose `errorArgs` 출력 확인 필요.
+  - `verbose-field-names=false`로 compact `ea` 출력 확인 필요.
+  - duplicate join 에러에서 DTO arg 캡처 확인 필요.
+
+## 105) 2026-05-03 Unit 6 verbose errorArgs 런타임 검증
+- 새 agent jar로 서버 재기동 후 에러 요청을 보냈다.
+- 요청:
+  - `GET /`
+  - `GET /board/999999999`
+  - `GET /board?page=-1`
+  - CSRF 포함 `POST /auth/join` duplicate member (`user1@kjweb.com`)
+- 확인 파일:
+  - `turtlepick-logs/trace-202605032056.log`
+- 확인 결과:
+  - `GET /board/999999999`
+    - `errorArgs:["999999999"]`
+  - `GET /board?page=-1`
+    - `errorArgs:["-1","null","{}"]`
+    - primitive `int page` boxing과 null arg 캡처가 확인됐다.
+  - duplicate join
+    - `errorArgs:["com.kjweb.web.dto.MemberJoinDto@684cc1b0"]`
+    - DTO arg가 safe `toString()`으로 snapshot 저장됐다.
+  - CGLIB proxy frame 제거는 유지됐다.
+- 미검증:
+  - `turtlepick.agent.logging.verbose-field-names=false` 설정 후 compact `ea` 출력 확인 필요.
+  - exclude 대상 arg placeholder(`<excluded: className>`) 출력은 실제 대상 endpoint가 없어 후속 검증 대상이다.
+
+## 106) 2026-05-03 Unit 6 compact ea 런타임 검증
+- `turtlepick.agent.logging.verbose-field-names=false`로 변경 후 서버를 재기동하고 에러 요청을 보냈다.
+- 확인 파일:
+  - `turtlepick-logs/trace-202605032100.log`
+- header:
+```json
+{"f":"h","v":1,"vfn":false,"c":"6d45d83916e8246239d29085b5af39bd20cb1366","ts":1777809620063}
+```
+- 확인 결과:
+  - `GET /board/999999999`
+    - compact `ea:["999999999"]`
+  - `GET /board?page=-1`
+    - compact `ea:["-1","null","{}"]`
+  - duplicate join
+    - compact `ea:["com.kjweb.web.dto.MemberJoinDto@2cb5f7a"]`
+  - compact 에러 필드 `eci/ec/em/rc/rm/uf/ea`가 정상 출력됐다.
+- Unit 6 필수 런타임 검증 완료:
+  - verbose `errorArgs` 확인 완료.
+  - compact `ea` 확인 완료.
+- 후속 미검증:
+  - exclude 대상 arg placeholder(`<excluded: className>`) 출력은 별도 대상 endpoint가 없어 후속 검증 대상이다.
+
+## 107) 2026-05-03 Unit 6 exclude placeholder 런타임 검증
+- 임시로 `turtlepick.agent.error.args.exclude-classes`를 아래 값으로 변경해 exclude placeholder를 검증했다.
+```properties
+turtlepick.agent.error.args.exclude-classes=java.lang.Long,java.lang.Integer,com.kjweb.web.dto.MemberJoinDto
+```
+- 서버 재기동 후 요청:
+  - `GET /board/999999999`
+  - `GET /board?page=-1`
+  - CSRF 포함 `POST /auth/join` duplicate member (`user1@kjweb.com`)
+- 확인 파일:
+  - `turtlepick-logs/trace-202605032105.log`
+- 확인 결과:
+```json
+"ea":["<excluded: java.lang.Long>"]
+```
+```json
+"ea":["<excluded: java.lang.Integer>","null","{}"]
+```
+```json
+"ea":["<excluded: com.kjweb.web.dto.MemberJoinDto>"]
+```
+- 검증 후 `turtlepick.properties`의 exclude 목록은 원래 운영 후보 값으로 되돌렸다.
+```properties
+turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,java.io.File,java.nio.ByteBuffer,org.springframework.web.multipart.MultipartFile,byte[],char[]
+```
+- Unit 6 런타임 검증 상태:
+  - verbose `errorArgs` 확인 완료.
+  - compact `ea` 확인 완료.
+  - exclude placeholder 확인 완료.

@@ -18,6 +18,7 @@ import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointRegistry;
 import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
+import com.turtlepick.agent.core.trace.ErrorArgCaptureOptions;
 import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
 import com.turtlepick.agent.core.trace.LogReadyNotifier;
 import com.turtlepick.agent.core.trace.TraceLogWriter;
@@ -71,9 +72,20 @@ public final class AgentPremain {
             }
 
             RuntimeMethodBridge.installEndpointResolver(new EndpointResolver(endpointRegistry));
+            RuntimeMethodBridge.installErrorMetaOptions(config.getUserFramePackages());
+            RuntimeMethodBridge.installErrorArgOptions(new ErrorArgCaptureOptions(
+                    config.isErrorArgsEnabled(),
+                    config.getErrorArgsMaxLength(),
+                    config.getErrorArgsExcludeClasses()
+            ));
             LogReadyNotifier logReadyNotifier = new LogReadyNotifier(logReadyClient, config, result.getCommitHash());
             logReadyNotifier.start();
-            TraceLogWriter.install(config.getLoggingDir(), config.getRollingIntervalMinutes(), logReadyNotifier);
+            TraceLogWriter.install(
+                    config.getLoggingDir(),
+                    config.getRollingIntervalMinutes(),
+                    result.getCommitHash(),
+                    config.isVerboseFieldNames(),
+                    logReadyNotifier);
             MethodProbeIndex probeIndex =
                     new MethodProbeIndexBuilder().build(methodMappingRegistry.snapshot());
 

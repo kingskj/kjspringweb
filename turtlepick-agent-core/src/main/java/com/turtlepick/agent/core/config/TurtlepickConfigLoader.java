@@ -8,6 +8,8 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Properties;
 
 public final class TurtlepickConfigLoader {
@@ -75,6 +77,15 @@ public final class TurtlepickConfigLoader {
                 .agentGitRepoRoot(getOptionalString(properties, "turtlepick.agent.git.repo-root", System.getProperty("user.dir")))
                 .loggingDir(getOptionalString(properties, "turtlepick.agent.logging.dir", "./turtlepick-logs"))
                 .rollingIntervalMinutes(getInt(properties, "turtlepick.agent.logging.rolling.interval-minutes", 5))
+                .verboseFieldNames(getBoolean(properties, "turtlepick.agent.logging.verbose-field-names", false))
+                .userFramePackages(getStringArray(properties, "turtlepick.agent.error.user-frame-packages"))
+                .errorArgsEnabled(getBoolean(properties, "turtlepick.agent.error.args.enabled", true))
+                .errorArgsMaxLength(getInt(properties, "turtlepick.agent.error.args.max-length", 10000))
+                .errorArgsExcludeClasses(getStringArray(
+                        properties,
+                        "turtlepick.agent.error.args.exclude-classes",
+                        AgentConfig.defaultErrorArgsExcludeClasses()
+                ))
                 .instrumentationHttp(getBoolean(properties, "turtlepick.agent.instrumentation.http", true))
                 .instrumentationService(getBoolean(properties, "turtlepick.agent.instrumentation.service", true))
                 .instrumentationSqlDatasourceProxy(getBoolean(properties, "turtlepick.agent.instrumentation.sql.datasource-proxy", true))
@@ -128,6 +139,45 @@ public final class TurtlepickConfigLoader {
     private boolean getBoolean(Properties properties, String key, boolean defaultValue) {
         String value = trimToNull(properties.getProperty(key));
         return value != null ? Boolean.parseBoolean(value) : defaultValue;
+    }
+
+    private String[] getStringArray(Properties properties, String key) {
+        return getStringArray(properties, key, new String[0]);
+    }
+
+    private String[] getStringArray(Properties properties, String key, String[] defaultValue) {
+        String value = trimToNull(properties.getProperty(key));
+        if (value == null) {
+            return copyOf(defaultValue);
+        }
+        String[] parts = value.split(",");
+        List<String> values = new ArrayList<String>();
+        for (int i = 0; i < parts.length; i++) {
+            String item = normalizeClassPattern(trimToNull(parts[i]));
+            if (item != null) {
+                values.add(item);
+            }
+        }
+        return values.toArray(new String[values.size()]);
+    }
+
+    private String normalizeClassPattern(String value) {
+        if ("byte[]".equals(value)) {
+            return "[B";
+        }
+        if ("char[]".equals(value)) {
+            return "[C";
+        }
+        return value;
+    }
+
+    private String[] copyOf(String[] value) {
+        if (value == null || value.length == 0) {
+            return new String[0];
+        }
+        String[] copy = new String[value.length];
+        System.arraycopy(value, 0, copy, 0, value.length);
+        return copy;
     }
 
     private String trimToNull(String value) {

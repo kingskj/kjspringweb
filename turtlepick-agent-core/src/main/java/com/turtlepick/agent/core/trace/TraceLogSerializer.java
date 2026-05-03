@@ -1,30 +1,205 @@
 package com.turtlepick.agent.core.trace;
 
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
 public final class TraceLogSerializer {
 
     private TraceLogSerializer() {
     }
 
-    public static String serialize(RuntimeTraceContext context, long timestampMs) {
-        StringBuilder builder = new StringBuilder(384);
+    public static String serializeHeader(String commitHash, long createdAtMs, boolean verboseFieldNames) {
+        StringBuilder builder = new StringBuilder(128);
         builder.append('{');
-        appendStringField(builder, "traceId", context.getTraceId());
-        appendNumberField(builder, "entryMethodId", Long.valueOf(context.getEntryMethodId()));
-        appendStringField(builder, "entryFqcnMethod", context.getEntryFqcnMethod());
-        appendNumberField(builder, "endpointId", context.getEndpointId());
-        appendStringField(builder, "endpointEntryType", context.getEndpointEntryType());
-        appendStringField(builder, "endpointEntryKey", context.getEndpointEntryKey());
-        appendStringField(builder, "endpointHttpMethod", context.getEndpointHttpMethod());
-        appendStringField(builder, "requestMethod", context.getRequestMethod());
-        appendStringField(builder, "requestUri", context.getRequestUri());
-        appendStringField(builder, "endpointResolutionStatus", context.getEndpointResolutionStatus());
-        appendNumberField(builder, "timestampMs", Long.valueOf(timestampMs));
+        appendStringField(builder, "f", "h");
+        appendNumberField(builder, "v", Integer.valueOf(1));
+        appendBooleanField(builder, "vfn", verboseFieldNames);
+        appendStringField(builder, "c", commitHash);
+        appendNumberField(builder, "ts", Long.valueOf(createdAtMs));
         builder.append('}');
         return builder.toString();
     }
 
+    public static String serialize(RuntimeTraceContext context, boolean verboseFieldNames) {
+        List<CompletedNode> nodes = context.snapshotNodes();
+        Collections.sort(nodes, new Comparator<CompletedNode>() {
+            @Override
+            public int compare(CompletedNode left, CompletedNode right) {
+                return Integer.compare(left.getCallId(), right.getCallId());
+            }
+        });
+
+        return verboseFieldNames ? serializeVerbose(context, nodes) : serializeCompact(context, nodes);
+    }
+
+    private static String serializeCompact(RuntimeTraceContext context, List<CompletedNode> nodes) {
+        StringBuilder builder = new StringBuilder(192);
+        builder.append('{');
+        appendStringField(builder, "f", "t");
+        appendNumberField(builder, "ep", context.getEndpointId());
+        appendBooleanField(builder, "e", context.hasError());
+        appendCompactError(builder, context);
+        appendCompactNodes(builder, nodes);
+        builder.append('}');
+        return builder.toString();
+    }
+
+    private static String serializeVerbose(RuntimeTraceContext context, List<CompletedNode> nodes) {
+        StringBuilder builder = new StringBuilder(256);
+        builder.append('{');
+        appendStringField(builder, "format", "trace");
+        appendNumberField(builder, "endpointId", context.getEndpointId());
+        appendBooleanField(builder, "error", context.hasError());
+        appendVerboseError(builder, context);
+        appendVerboseNodes(builder, nodes);
+        builder.append('}');
+        return builder.toString();
+    }
+
+    private static void appendCompactError(StringBuilder builder, RuntimeTraceContext context) {
+        Integer errorCallId = context.getErrorCallId();
+        if (errorCallId == null) {
+            return;
+        }
+        appendNumberField(builder, "eci", errorCallId);
+        appendStringField(builder, "ec", context.getExceptionClass());
+        appendStringField(builder, "em", context.getExceptionMessage());
+        if (hasDistinctRootException(context)) {
+            appendStringField(builder, "rc", context.getRootExceptionClass());
+            appendStringField(builder, "rm", context.getRootExceptionMessage());
+        }
+        appendCompactUserFrames(builder, context.snapshotUserFrames());
+        appendStringArrayField(builder, "ea", context.snapshotErrorArgs());
+    }
+
+    private static void appendVerboseError(StringBuilder builder, RuntimeTraceContext context) {
+        Integer errorCallId = context.getErrorCallId();
+        if (errorCallId == null) {
+            return;
+        }
+        appendNumberField(builder, "errorCallId", errorCallId);
+        appendStringField(builder, "exceptionClass", context.getExceptionClass());
+        appendStringField(builder, "exceptionMessage", context.getExceptionMessage());
+        if (hasDistinctRootException(context)) {
+            appendStringField(builder, "rootExceptionClass", context.getRootExceptionClass());
+            appendStringField(builder, "rootExceptionMessage", context.getRootExceptionMessage());
+        }
+        appendVerboseUserFrames(builder, context.snapshotUserFrames());
+        appendStringArrayField(builder, "errorArgs", context.snapshotErrorArgs());
+    }
+
+    private static void appendStringArrayField(StringBuilder builder, String key, String[] values) {
+        if (values == null || values.length == 0) {
+            return;
+        }
+        appendFieldName(builder, key);
+        builder.append('[');
+        for (int i = 0; i < values.length; i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            appendJsonString(builder, values[i]);
+        }
+        builder.append(']');
+    }
+
+    private static boolean hasDistinctRootException(RuntimeTraceContext context) {
+        String exceptionClass = context.getExceptionClass();
+        String rootExceptionClass = context.getRootExceptionClass();
+        return rootExceptionClass != null && !rootExceptionClass.equals(exceptionClass);
+    }
+
+    private static void appendCompactUserFrames(StringBuilder builder, List<UserFrame> userFrames) {
+        if (userFrames == null || userFrames.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "uf");
+        builder.append('[');
+        for (int i = 0; i < userFrames.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            UserFrame frame = userFrames.get(i);
+            builder.append('{');
+            builder.append("\"c\":");
+            appendJsonString(builder, frame.getClassName());
+            builder.append(",\"m\":");
+            appendJsonString(builder, frame.getMethodName());
+            builder.append(",\"l\":").append(frame.getLineNumber());
+            builder.append('}');
+        }
+        builder.append(']');
+    }
+
+    private static void appendVerboseUserFrames(StringBuilder builder, List<UserFrame> userFrames) {
+        if (userFrames == null || userFrames.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "userFrames");
+        builder.append('[');
+        for (int i = 0; i < userFrames.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            UserFrame frame = userFrames.get(i);
+            builder.append('{');
+            builder.append("\"className\":");
+            appendJsonString(builder, frame.getClassName());
+            builder.append(",\"methodName\":");
+            appendJsonString(builder, frame.getMethodName());
+            builder.append(",\"lineNumber\":").append(frame.getLineNumber());
+            builder.append('}');
+        }
+        builder.append(']');
+    }
+
+    private static void appendCompactNodes(StringBuilder builder, List<CompletedNode> nodes) {
+        appendFieldName(builder, "n");
+        builder.append('[');
+        for (int i = 0; i < nodes.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+
+            CompletedNode node = nodes.get(i);
+            builder.append('{');
+            builder.append("\"i\":").append(node.getCallId());
+            builder.append(",\"p\":").append(node.getParentCallId());
+            builder.append(",\"m\":").append(node.getMethodId());
+            builder.append(",\"st\":").append(node.getStartOffsetMs());
+            builder.append(",\"et\":").append(node.getEndOffsetMs());
+            builder.append('}');
+        }
+        builder.append(']');
+    }
+
+    private static void appendVerboseNodes(StringBuilder builder, List<CompletedNode> nodes) {
+        appendFieldName(builder, "nodes");
+        builder.append('[');
+        for (int i = 0; i < nodes.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+
+            CompletedNode node = nodes.get(i);
+            builder.append('{');
+            builder.append("\"callId\":").append(node.getCallId());
+            builder.append(",\"parentCallId\":").append(node.getParentCallId());
+            builder.append(",\"methodId\":").append(node.getMethodId());
+            builder.append(",\"startOffsetMs\":").append(node.getStartOffsetMs());
+            builder.append(",\"endOffsetMs\":").append(node.getEndOffsetMs());
+            builder.append('}');
+        }
+        builder.append(']');
+    }
+
     private static void appendStringField(StringBuilder builder, String key, String value) {
         appendFieldName(builder, key);
+        appendJsonString(builder, value);
+    }
+
+    private static void appendJsonString(StringBuilder builder, String value) {
         if (value == null) {
             builder.append("null");
             return;
@@ -73,6 +248,11 @@ public final class TraceLogSerializer {
         } else {
             builder.append(value);
         }
+    }
+
+    private static void appendBooleanField(StringBuilder builder, String key, boolean value) {
+        appendFieldName(builder, key);
+        builder.append(value);
     }
 
     private static void appendFieldName(StringBuilder builder, String key) {
