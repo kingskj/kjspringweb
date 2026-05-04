@@ -1615,3 +1615,15 @@ turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,j
   - verbose `errorArgs` 확인 완료.
   - compact `ea` 확인 완료.
   - exclude placeholder 확인 완료.
+
+## 108) 2026-05-04 h202605031414 하루 총괄 일지 정리
+- `docs/h202605031414.md`를 2026-05-03 하루 총괄 일지로 교체했다.
+- 기존 문서는 Unit 1(nodes[] 적재) 중심이라 하루 작업 흐름을 복원하기 부족했다.
+- 새 문서 구조:
+  - Unit 1~6 전체 흐름
+  - 각 Unit이 왜 필요했는지 인과관계
+  - trace v1 header/compact/verbose 계약
+  - 실제 검증 파일명과 핵심 출력
+  - 서버 로그와 TurtlePick trace 로그 구분
+  - 남은 TODO: log-ready 실패 시 LOG_OFF, engine resume, `/agent/resume` 등록, Repository/DAO node, Kafka/Batch/ETL 대용량 파라미터 정책
+- Unit 6 상세는 중복을 피하기 위해 요약만 남겼고, 상세 맥락은 현재 `gpt.md` 102~107번 기록을 기준으로 둔다.
