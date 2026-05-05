@@ -1627,3 +1627,221 @@ turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,j
   - 서버 로그와 TurtlePick trace 로그 구분
   - 남은 TODO: log-ready 실패 시 LOG_OFF, engine resume, `/agent/resume` 등록, Repository/DAO node, Kafka/Batch/ETL 대용량 파라미터 정책
 - Unit 6 상세는 중복을 피하기 위해 요약만 남겼고, 상세 맥락은 현재 `gpt.md` 102~107번 기록을 기준으로 둔다.
+
+## 109) 2026-05-05 TurtlePick/대상서버 문서 및 코드 재분석 메모
+- 사용자 요청에 따라 `D:\workspace\turtlepick`의 `README.md`, `gpt.md`, `CLAUDE.md`, `docs/*.md`와 현재 프로젝트 `kjspringweb`의 `gpt.md`, `work_protocol.md`, `docs/*.md`를 다시 읽고 실제 코드 상태를 대조했다.
+- 양쪽 저장소 모두 `work` 브랜치이며, `git status` 기준 추적되지 않은 `.claude/`만 보인다.
+- 현재 프로젝트 작업 모드는 계속 "제안/분석만"이다. `검토 완료. 확정. 수정해` 또는 `확정. 반영.` 전에는 `gpt.md` 외 코드/문서 수정 금지 원칙을 유지한다.
+- `turtlepick` 엔진 실제 상태:
+  - `/api/agent/meta`는 기존 `methods[] + endpoints[]` 계약까지만 구현되어 있다.
+  - `AgentMetaRequest`에는 아직 `repositories[]`가 없고, `AgentMetaResponse`에는 아직 `repositoryMethods[]`가 없다.
+  - `method_def` 스키마는 `method_id`, `commit_hash`, `fqcn_method`만 있어 `REPOSITORY_INHERITED` 저장에 필요한 `method_kind/owner/runtime_params/domain_type/id_type/inherited_from` 계열 저장 구조가 아직 없다.
+  - `LogReadyService.checkSourceFileExistsStub`, `LogFileProcessor.read/store/delete*Stub`는 여전히 stub이다.
+- `kjspringweb` 서버 agent 실제 상태:
+  - trace v1 header/compact/verbose, method call tree, error flag, root cause/userFrames, errorArgs, log-ready notifier까지 구현되어 있다.
+  - `MetaRequest/MetaResponse/MetaJsonCodec/MethodMappingRegistry`는 일반 method/endpoint만 처리하고, repository meta request/response/registry는 아직 없다.
+  - Spring `ApplicationContext` 접근 경로와 `/agent/resume` 수신 경로는 아직 없다.
+- 대상 서버 Repository 구조:
+  - `BoardRepository`, `MemberRepository`, `MenuRepository`, `RoleRepository` 모두 `JpaRepository<..., Long>` 기반이다.
+  - 현재 서버 trace에서 Controller -> Service는 잡히지만 inherited Repository 호출(`save`, `findById`, `delete`, `count` 등)은 methodId 계약 부재로 node화되지 않는다.
+- 다음 우선순위 판단:
+  1. Repository inherited node를 먼저 하려면 `docs/작업지시문_20260503.md`의 meta 계약 확장이 선행이다.
+  2. 엔진 수거/저장을 먼저 하려면 `LogReadyService`/`LogFileProcessor` stub을 실제 파일 I/O와 trace v1 parser로 교체하는 것이 선행이다.
+  3. LOG_OFF/resume 정책은 `/agent/resume` 수신 경로와 함께 잡아야 한다. 현재 log-ready 실패 시 즉시 LOG_OFF를 적용하면 복구 경로가 없어 장시간 정지될 수 있다.
+
+## 110) 2026-05-05 서버 agent 우선순위 및 resume 설계 보류 TODO
+- 사용자 최신 결정:
+  - 엔진 쪽으로 넘어가기 전 서버 agent에서 할 수 있는 것을 먼저 끝낸다.
+  - 우선 작업은 **엔진 죽었을 시 서버 trace 로그 기록 중단 로직**이다.
+  - `/agent/resume` 수신 기반 설계는 일단 보류하고 TODO로만 남긴다.
+- 다음 최우선 서버 작업:
+  - `LogReadyNotifier`가 `/api/agent/log-ready` 전송 1회 + 1초 후 1회 재시도까지 실패하면 `AgentState=LOG_OFF`로 전환한다.
+  - `LOG_OFF` 상태에서는 신규 trace 기록/flush/write가 중단되어야 한다.
+  - 이미 닫힌 trace 파일은 서버가 삭제하지 않는다. 엔진 수거 권한/정책으로 처리한다.
+  - LOG_OFF 전환은 조용히 삼키지 말고 warn 로그로 남긴다.
+- 확인 필요:
+  - 현재 `AgentStateHolder`는 `AgentPremain` 지역 조립 객체 성격이 강하므로, `LogReadyNotifier`, `RuntimeMethodBridge`, `TraceLogWriter`가 같은 상태를 볼 수 있게 런타임 공유 경로가 필요하다.
+  - LOG_OFF 시 어느 지점에서 중단할지 결정해야 한다.
+    - 후보 1: `RuntimeMethodBridge.enter()`에서 state 확인 후 context 생성 자체를 막는다.
+    - 후보 2: root flush/write 직전 state 확인.
+    - 후보 3: 둘 다 적용하여 신규 context와 파일 write를 모두 차단.
+- `/agent/resume` 보류 설계 메모:
+  - Boot 전용 `ApplicationContextInitializer`/`spring.factories` 경로는 baseline에서 제외한다. 레거시 Spring/WAR/외장 Tomcat 호환을 위해 기존 Servlet/Spring MVC hook 계층을 우선한다.
+  - 현재 서버 agent는 `DispatcherServlet#doDispatch(javax/jakarta request,response)`를 이미 ASM으로 후킹하고 있으므로, 새 hook 추가보다 기존 HTTP hook 확장이 우선 후보다.
+  - 현재 bridge는 request만 받으므로 `/agent/resume` 직접 응답을 위해서는 request/response 둘 다 받는 얇은 stable ABI bridge가 필요하다.
+  - `AgentHttpBridge.safeEnterOrHandle(Object req, Object res): boolean` 같은 keep 대상 ABI를 두고, `/agent/resume`이면 내부 router로 위임 후 `doDispatch` 본문을 skip하는 방향이 유력하다.
+  - stable ABI bridge에는 URI 분기만 두고, 실제 resume 처리(commitHash 비교, state 전환, JSON response write)는 난독화 가능 내부 클래스(`AgentInternalRouter`, `ResumeHandler` 등)로 분리한다.
+  - `javax/jakarta`는 컴파일 import 없이 ASM descriptor 문자열 매칭 + bridge `Object`/reflection 방식으로 유지한다.
+  - resume 응답은 HTTP status 분기보다 HTTP 200 + body state/reason 패턴을 우선한다.
+  - 현재 엔진 startup resume body에는 `commitHash`가 없으므로 서버는 `commitHash` optional로 처리한다.
+    - `commitHash` 없음: 구버전/현행 엔진 호환으로 `LOG_ON`.
+    - `commitHash` 있음 + 일치: `LOG_ON`.
+    - `commitHash` 있음 + 불일치: `LOG_OFF`, reason=`COMMIT_MISMATCH`, `serverCommitHash` 응답.
+  - 내부 처리 예외는 앱 흐름으로 전파하지 않고 agent 응답 body/log로 정리한다.
+
+## 111) 2026-05-05 오늘 작업 핑퐁 방식 변경
+- 사용자 최신 지시:
+  - 오늘 작업은 Claude가 먼저 상세안을 제안한다.
+  - GPT는 그 상세안에 대해 딴지/보완/리스크 검토를 한다.
+  - GPT-Claude 핑퐁으로 합의안을 만든다.
+  - Claude가 최종 반영하고 테스트한다.
+  - GPT는 반영 결과와 테스트 결과를 검증하는 역할을 맡는다.
+- 오늘 한정 운영 방식으로 기록한다.
+- 기존 `work_protocol.md`의 기본 역할 분담과 다를 수 있으나, 사용자 최신 지시가 우선한다.
+
+## 112) 2026-05-05 `/agent/resume` 최종 설계 합의 메모
+- `/agent/resume` 수신은 Boot 전용 controller/initializer가 아니라 기존 `DispatcherServlet#doDispatch` ASM hook 확장으로 간다.
+- 신규 stable ABI 후보:
+  - `AgentHttpBridge.install(AgentStateHolder, String commitHash, LogReadyNotifier)`
+  - `AgentHttpBridge.safeEnterOrHandle(Object request, Object response): boolean`
+- stable ABI bridge는 얇게 유지한다.
+  - 내부 요청 여부 확인.
+  - `/agent/resume`이면 내부 router에 위임 후 `true` 반환하여 `doDispatch` 본문을 skip.
+  - 일반 요청이면 기존 `HttpRequestContextBridge.safeEnter(request)` 후 `false`.
+- 실제 처리 로직은 난독화 가능 내부 클래스로 분리한다.
+  - `AgentInternalRouter`
+  - `ResumeHandler`
+- URI 판정은 `endsWith("/agent/resume")` 금지.
+  - `getContextPath()`를 reflection으로 읽고 context path를 제거한 뒤 정확히 `/agent/resume`과 비교한다.
+  - `/api/agent/resume`, `/foo/agent/resume` 같은 애플리케이션 endpoint 오인 hijack을 막는다.
+- resume body:
+  - `command`는 `RESUME_LOGGING`만 허용.
+  - `commitHash`는 optional이다.
+  - hash 없음: 현행 엔진 호환으로 `LOG_ON`.
+  - hash 일치: `LOG_ON`.
+  - hash 불일치: `LOG_OFF`, reason=`COMMIT_MISMATCH`.
+- 응답은 meta API 패턴과 맞춰 HTTP 200 + JSON body를 사용한다.
+  - 성공: `{"state":"LOG_ON","serverCommitHash":"..."}`
+  - 거절: `{"state":"LOG_OFF","reason":"...","serverCommitHash":"..."}`
+- 내부 요청으로 확정된 뒤 처리 예외가 나면 앱으로 넘기지 않는다.
+  - `RESUME_HANDLE_FAILED` JSON 응답을 시도하고 `LOG_OFF`로 둔다.
+  - fatal(`VirtualMachineError`, `ThreadDeath`)만 재전파한다.
+- `LogReadyNotifier`는 resume 후 worker 재시작이 가능해야 한다.
+  - `start()`는 `worker != null && worker.isAlive()`일 때만 return.
+  - `runLoop()` finally에서 `clearWorkerIfCurrent(Thread.currentThread())`로 죽은 worker 참조를 제거한다.
+  - `onClosed()`는 enqueue 성공 후 `start()`를 호출하여 resume race로 worker가 살아나지 못한 경우에도 다음 rolling 시점에 복구한다.
+- `DispatcherServletDoDispatchAdapter.visitCode()`는 `AgentHttpBridge.safeEnterOrHandle(req,res)` 호출 결과가 true면 `RETURN`, false면 기존 흐름을 이어간다.
+- 현재 상태:
+  - 최종 설계 딴지는 닫혔다.
+  - 사용자가 반영 지시를 내리면 Claude가 구현/테스트하고 GPT가 검증한다.
+
+## 113) 2026-05-05 `/agent/resume` 반영 후 GPT 실검증 결과
+- Claude가 `/agent/resume` 설계를 반영했고, GPT가 코드/빌드/런타임을 검증했다.
+- 반영 파일:
+  - 신규: `AgentHttpBridge.java`, `AgentInternalRouter.java`, `ResumeHandler.java`
+  - 변경: `LogReadyNotifier.java`, `DispatcherServletDoDispatchAdapter.java`, `AgentPremain.java`
+- 정적 검증:
+  - `AgentHttpBridge.install(...)`, `safeEnterOrHandle(...)` 존재 확인.
+  - `AgentInternalRouter.isInternalRequest()`가 `getContextPath()` 기반 정규화 후 `/agent/resume` 정확 비교하는 것 확인.
+  - `ResumeHandler`가 `RESUME_LOGGING`, optional `commitHash`, `COMMIT_MISMATCH`, `LOG_ON/LOG_OFF` 응답을 처리하는 것 확인.
+  - `LogReadyNotifier.onClosed()` enqueue 성공 후 `start()` 호출 확인.
+  - `DispatcherServletDoDispatchAdapter`가 `safeEnterOrHandle(req,res)` 결과 true면 `RETURN` 삽입 확인.
+  - `AgentPremain`에서 `AgentHttpBridge.install(stateHolder, commitHash, logReadyNotifier)` 확인.
+- 빌드:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+- 런타임 조건:
+  - 엔진 `http://localhost:8081/api/health` 정상 `UP`.
+  - 대상 서버 `8080`은 검증 시작 시 리슨 중이 아니어서 GPT가 새 agent jar를 붙여 테스트용으로 기동했다.
+- 핵심 실검증 실패:
+  - unauthenticated `POST http://localhost:8080/agent/resume`는 agent JSON이 아니라 Spring Security redirect를 탔다.
+  - auto redirect를 끄고 확인한 1차 응답:
+    - HTTP `302`
+    - `Location: http://localhost:8080/auth/login;jsessionid=...`
+  - redirect를 따라가면 HTTP 200 로그인 HTML이 반환된다.
+  - 기대했던 `{"state":"LOG_ON",...}` / `{"state":"LOG_OFF",...}` 응답은 나오지 않았다.
+- 원인 판단:
+  - 현재 hook 위치가 `DispatcherServlet#doDispatch`라서 Spring Security filter chain 이후에만 실행된다.
+  - `SecurityConfig`는 `/agent/resume`을 permitAll로 열지 않고 `.anyRequest().authenticated()`로 묶고 있다.
+  - 따라서 `/agent/resume` 원 요청은 `DispatcherServlet`에 도달하기 전에 security filter에서 `/auth/login`으로 리다이렉트된다.
+  - trace 파일에는 `/agent/resume` 자체가 아니라 리다이렉트된 login endpoint trace만 남았다.
+- 결론:
+  - 이번 구현은 "보안 필터가 없는/permitAll인 앱"에서는 동작 가능성이 있지만, 실제 대상 서버 기준으로는 engine startup resume 수신 요구를 만족하지 못한다.
+  - `/agent/resume` 내부 endpoint는 `DispatcherServlet`보다 앞선 Servlet filter chain 계층에서 선점해야 한다.
+- 다음 보정 방향 후보:
+  - 기존 `DispatcherServlet` hook은 일반 HTTP context 수집용으로 유지한다.
+  - 내부 endpoint만 처리하는 별도 filter-chain hook을 추가한다.
+  - Tomcat 기준 후보: `org.apache.catalina.core.ApplicationFilterChain#doFilter(ServletRequest, ServletResponse)`.
+  - javax/jakarta 양쪽 descriptor를 지원한다.
+  - filter-chain hook에서는 일반 요청에 `HttpRequestContextBridge.safeEnter()`를 호출하지 말고, `/agent/resume` internal 요청이면 응답 후 `RETURN`, 아니면 그대로 filter chain을 계속 진행한다.
+  - 이를 위해 `AgentHttpBridge.safeHandleInternalOnly(Object req, Object res): boolean` 같은 별도 얇은 ABI가 필요하다.
+- 미검증:
+  - 현재 `/agent/resume`이 실제로 agent까지 도달하지 못하므로 invalid command, commit mismatch, LOG_OFF 후 resume worker 재시작은 런타임 검증하지 못했다.
+
+## 114) 2026-05-05 `/agent/resume` Tomcat filter-chain 보정 후 GPT 검증
+- 113번 실패 원인(Spring Security filter chain이 `DispatcherServlet`보다 앞에서 `/agent/resume`을 302로 차단)을 해결하기 위해 Tomcat filter-chain 선점 hook이 추가됐다.
+- 반영 파일:
+  - 신규: `TomcatFilterChainInterceptTransformer.java`
+  - 신규: `TomcatFilterChainClassVisitor.java`
+  - 신규: `TomcatFilterChainDoFilterAdapter.java`
+  - 변경: `AgentHttpBridge.java`
+  - 변경: `AgentInternalRouter.java`
+  - 변경: `AgentPremain.java`
+- GPT 정적 확인:
+  - `AgentInternalRouter.install()`은 `serverCommitHash`, `logReadyNotifier`, `stateHolder` 순서로 대입하고, installed flag 역할의 `stateHolder`를 마지막에 세팅한다.
+  - `AgentInternalRouter.isInstalled()`는 `stateHolder != null && serverCommitHash != null && logReadyNotifier != null`로 확인한다.
+  - `AgentHttpBridge.safeIntercept(Object,Object)`는 `isInstalled()` guard 후 internal request만 처리한다.
+  - `TomcatFilterChainDoFilterAdapter`는 `ApplicationFilterChain#doFilter` 진입 시 `safeIntercept(req,res)`가 true면 `RETURN`한다.
+- 런타임 검증 상태:
+  - `8080` 대상 서버 PID `523656` 리슨 확인.
+  - `8081` 엔진 PID `512616` 리슨 확인.
+  - `server-test-err.log`에서 transform 성공 로그 확인:
+    - `filter chain intercept installed class=org/apache/catalina/core/ApplicationFilterChain`
+  - `POST /agent/resume` + `{"command":"RESUME_LOGGING"}`:
+    - HTTP 200
+    - `Content-Type: application/json;charset=UTF-8`
+    - `{"state":"LOG_ON","serverCommitHash":"237ce4dc523b120e3311d4937f4085d4209439be"}`
+  - `POST /agent/resume` + `{"command":"BAD_COMMAND"}`:
+    - HTTP 200
+    - `{"state":"LOG_OFF","reason":"INVALID_COMMAND","serverCommitHash":"..."}`
+  - `POST /agent/resume` + mismatched `commitHash`:
+    - HTTP 200
+    - `{"state":"LOG_OFF","reason":"COMMIT_MISMATCH","serverCommitHash":"..."}`
+  - 검증 종료 시 `POST /agent/resume` + `RESUME_LOGGING`을 다시 보내 `LOG_ON`으로 복구했다.
+  - hijack 방지 확인:
+    - `POST /api/agent/resume`는 agent JSON이 아니라 Spring Security 302 `/auth/login`으로 동작했다.
+    - 즉 `/agent/resume` 정확 경로만 선점하고 `/api/agent/resume`은 가로채지 않는다.
+- 결론:
+  - Tomcat filter-chain 보정으로 Spring Security/CSRF보다 앞에서 `/agent/resume` 선점이 동작한다.
+  - 113번의 핵심 실패는 해결됐다.
+- 남은 주의:
+  - 이 보정은 Tomcat adapter다. Jetty/Undertow/외장 WAS는 별도 adapter가 필요하다.
+  - 난독화 설정 시 `AgentHttpBridge.install`, `safeEnterOrHandle`, `safeIntercept`는 keep ABI로 유지해야 한다.
+
+## 115) 2026-05-05 엔진 재기동 resume E2E 검증
+- GPT가 `8081` 엔진과 `8080` kjspringweb 서버를 직접 기동해 startup resume 복구 E2E를 검증했다.
+- 기동 조건:
+  - 엔진: `D:\workspace\turtlepick\engine-app\build\libs\engine-app.jar`, profile `dev`, PID `557740` 최종 리슨.
+  - 서버: `kjspringweb-0.0.1-SNAPSHOT.jar` + `-javaagent:turtlepick-agent-core-0.1.0-SNAPSHOT.jar` + `-Dturtlepick.config=D:\workspace\kjspringweb\turtlepick.properties`, PID `570456` 리슨.
+  - 서버 `turtlepick.agent.logging.rolling.interval-minutes=1`.
+- 검증 흐름:
+  - 엔진 ON 상태에서 서버 bootstrap/meta 성공 및 `/auth/login` HTTP 200 확인.
+  - 최초 rolling에서 `log_ready ok fileName=trace-202605051403.log resultCode=ACK` 확인.
+  - 엔진 PID `564792`를 내려 `log_ready failed fileName=trace-202605051404.log reason=HTTP_ERROR:ConnectException` 유도.
+  - 서버 agent가 `agent state LOG_OFF reason=LOG_READY_FAILED`로 전환되는 것 확인.
+  - 엔진 재기동 후 `EngineStartupResumeNotifier`가 `POST http://localhost:8080/agent/resume` 전송:
+    - 엔진 로그: `[RESUME] startup send success status=200 ...`
+    - 서버 로그: `agent state LOG_ON reason=RESUME`
+  - resume 이후 `/auth/login` 요청이 `trace-202605051406.log`에 기록됨.
+  - 다음 rolling에서 `log_ready ok fileName=trace-202605051406.log resultCode=ACK` 확인.
+- 결론:
+  - LOG_OFF 전환, 엔진 startup resume, LOG_ON 복구, trace 재개, log-ready ACK까지 E2E 통과.
+- 실행 산출물:
+  - 서버 로그: `logs\e2e-20260505-140341\server.out.log`, `logs\e2e-20260505-140341\server.err.log`
+  - 엔진 로그: `D:\workspace\turtlepick\logs\engine-app-20260505-140614.log`
+- 주의:
+  - 현재 검증용 서버/엔진 프로세스는 계속 리슨 중이다: 서버 `8080` PID `570456`, 엔진 `8081` PID `557740`.
+
+## 116) 2026-05-05 루트 테스트 로그 생성 금지 재확인
+- `server-test.log`, `server-test-err.log`는 오전 테스트 과정에서 프로젝트 루트에 남은 임시 실행 산출물이다.
+- 이는 87/92/93번에서 정한 원칙과 충돌한다. `.gitignore`로 숨기는 것은 보조 안전망일 뿐이며, 핵심 규칙은 **루트에 생성하지 않는 것**이다.
+- 이후 수동 기동, smoke, E2E 검증 시 stdout/stderr/pid 파일은 반드시 목적별 하위 디렉터리로 보낸다.
+  - 예: `logs/e2e-YYYYMMDD-HHmmss/server.out.log`
+  - 예: `logs/e2e-YYYYMMDD-HHmmss/server.err.log`
+  - 예: `logs/smoke/<case-name>.out.log`
+- 금지:
+  - `server-test.log`
+  - `server-test-err.log`
+  - `agent-smoke.out.log`
+  - `agent-smoke.err.log`
+  - `*.pid` 루트 직접 생성
+- 테스트 명령을 새로 만들 때는 먼저 출력 경로가 루트인지 확인한다. 루트 파일명 리다이렉션이면 실행하지 않는다.

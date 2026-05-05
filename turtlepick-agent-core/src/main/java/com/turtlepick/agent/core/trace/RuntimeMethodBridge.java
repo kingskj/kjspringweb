@@ -1,5 +1,6 @@
 package com.turtlepick.agent.core.trace;
 
+import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.ResolvedEndpoint;
 import com.turtlepick.agent.core.util.AgentLog;
@@ -11,11 +12,16 @@ public final class RuntimeMethodBridge {
     private static final ErrorArgCaptureOptions DEFAULT_ARG_OPTIONS =
             new ErrorArgCaptureOptions(true, 10000, new String[0]);
 
+    private static volatile AgentStateHolder agentStateHolder;
     private static volatile EndpointResolver endpointResolver;
     private static volatile String[] userFramePackages = EMPTY_PACKAGES;
     private static volatile ErrorArgCaptureOptions errorArgOptions = DEFAULT_ARG_OPTIONS;
 
     private RuntimeMethodBridge() {
+    }
+
+    public static void installStateHolder(AgentStateHolder holder) {
+        agentStateHolder = holder;
     }
 
     public static void installEndpointResolver(EndpointResolver resolver) {
@@ -37,7 +43,16 @@ public final class RuntimeMethodBridge {
     }
 
     public static void enter(int methodId, String fqcnMethod) {
-        RuntimeTraceContext context = TraceContextHolder.getOrCreate();
+        RuntimeTraceContext context = TraceContextHolder.get();
+
+        if (context == null) {
+            AgentStateHolder holder = agentStateHolder;
+            if (holder != null && !holder.isLogOn()) {
+                return;
+            }
+            context = TraceContextHolder.getOrCreate();
+        }
+
         boolean root = context.isEmpty();
         context.push(methodId, fqcnMethod);
 
@@ -102,7 +117,10 @@ public final class RuntimeMethodBridge {
 
         if (context.isEmpty()) {
             try {
-                TraceLogWriter.write(context);
+                AgentStateHolder holder = agentStateHolder;
+                if (holder == null || holder.isLogOn()) {
+                    TraceLogWriter.write(context);
+                }
             } catch (Throwable t) {
                 AgentLog.warn("trace flush failed methodId=" + context.getEntryMethodId()
                         + " cause=" + t.getClass().getSimpleName());

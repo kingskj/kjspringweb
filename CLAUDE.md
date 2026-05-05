@@ -123,20 +123,25 @@ kjspringweb/
 
 ---
 
-## 11. 현재 상태 (2026-05-03)
+## 11. 현재 상태 (2026-05-05)
 
 - GCP 배포 상태로 동작 확인
-- TurtlePick Agent 섹터 1~7 완료, 섹터 8~9 미구현
-- TurtlePick Engine 로컬 기동 확인 (localhost:8081, health UP)
+- **TurtlePick Agent 섹터 1~9 모두 완료 (2026-05-05)**
+- TurtlePick Engine 로컬 기동 확인 (localhost:8081)
 - kjspringweb HEAD: `6d45d83916e8246239d29085b5af39bd20cb1366` (엔진에 인덱싱 완료)
-- **서버 agent trace 포맷 정비 Unit 1~4 완료 (2026-05-03)**:
-  - Unit 1: 로그 포맷 재설계 (compact/verbose, 헤더 레코드, vfn 옵션)
-  - Unit 2: hasError 추적 (`e` 플래그 실제 동작)
-  - Unit 3: try/finally ASM 계측 (`error:true` E2E 검증 완료)
-  - Unit 4: 에러 메타 (errorCallId/exceptionClass/exceptionMessage, first-write-wins)
-- E2E 검증 완료: 정상 `error:false`, 예외 `error:true`, errorCallId/ec/em 정상 출력
-- Repository/DAO 계측: 엔진 meta 계약 선행 필요 → `turtlepick/docs/작업지시문_20260503.md` 작성
-- 다음 서버 단위: exceptionMessage truncate + stack trace 핵심 추출 (5단위)
+- 서버 agent trace 포맷 정비 Unit 1~6 완료 (2026-05-03):
+  - Unit 1: nodes[] call tree (callId/parentCallId)
+  - Unit 2: trace v1 포맷 전환 (header record, compact/verbose, vfn)
+  - Unit 3: try/catch 기반 exit 보장 (ATHROW 관통 대응)
+  - Unit 4: 에러 메타 (errorCallId/ec/em, first-write-wins)
+  - Unit 5: root cause + userFrames 추출 (CGLIB frame 제거)
+  - Unit 6: 에러 지점 파라미터 캡처 (ea/errorArgs, exclude-classes)
+- **섹터 9 완료 (2026-05-05)**:
+  - log-ready 최종 실패 → `AgentStateHolder.markLogOff()` 전환
+  - LOG_OFF 상태에서 신규 trace 진입 차단 (`RuntimeMethodBridge.enter()` 가드)
+  - `POST /agent/resume` → Spring Security 앞에서 Tomcat 필터체인 선점 → LOG_ON 복구
+  - E2E 검증 통과: LOG_ON/LOG_OFF/INVALID_COMMAND/COMMIT_MISMATCH/hijack방지 모두 정상
+- **다음 작업: Repository/DAO 계측** — 엔진 meta 계약 선행 필요 → `turtlepick/docs/작업지시문_20260503.md`
 
 ---
 
@@ -159,8 +164,8 @@ kjspringweb/
 | 5 | `MethodMappingRegistry` — fqcnMethod→methodId 적재 | ✅ |
 | 6 | ASM probe (`instrument` + `trace` 패키지) | ✅ |
 | 7 | HTTP context + endpoint 귀속 + trace 파일 기록/롤링 | ✅ |
-| 8 | `POST /api/agent/log-ready` 전송 | ❌ 미구현 |
-| 9 | 엔진 수거 응답 처리 (파일 삭제/오프셋) | ❌ 미구현 |
+| 8 | `POST /api/agent/log-ready` 전송 | ✅ (2026-05-02 완료) |
+| 9 | log-ready 실패 → LOG_OFF + `/agent/resume` 수신 → LOG_ON 복구 루프 | ✅ (2026-05-05 완료) |
 
 ### trace 파일
 - 경로: `turtlepick-logs/trace-{yyyyMMddHHmm}.log`
@@ -169,15 +174,9 @@ kjspringweb/
 
 ---
 
-## 13. 다음 과제 (2026-05-03 기준)
+## 13. 다음 과제 (2026-05-05 기준)
 
-### 서버 agent (즉시 진행 가능)
-
-| 순위 | 작업 | 위치 |
-|------|------|------|
-| 1 | **5단위**: exceptionMessage truncate(max 500자) + stack trace 핵심 추출 | turtlepick-agent-core |
-| 2 | **섹터 8**: `POST /api/agent/log-ready` 전송 구현 | turtlepick-agent-core |
-| 3 | **섹터 9**: 엔진 수거 응답 처리 (파일 삭제/오프셋) | turtlepick-agent-core |
+### 서버 agent — 섹터 9 완료. 다음은 엔진 선행 후 진행
 
 ### 엔진 선행 후 서버 작업
 
@@ -191,8 +190,16 @@ kjspringweb/
 
 | 순위 | 작업 |
 |------|------|
-| 1 | 실파일 수거/파싱/DB저장/archive/delete (stub → 실구현) |
+| 1 | **선행: fqcn_method v2** — engine + agent 동시 변경 (원자 단위) |
 | 2 | Repository inherited methodId 발번 + meta 응답 확장 (`작업지시문_20260503.md`) |
+| 3 | 실파일 수거/파싱/DB저장/archive/delete (stub → 실구현) |
+
+### fqcn_method v2 — agent 변경 포인트
+
+- ASM descriptor에서 runtime signature 구성 시 return type 포함
+- 기존: `{ownerFqcn}#{methodName}({paramTypes})`
+- 변경: `{ownerFqcn}#{methodName}({paramTypes}):{returnType}`
+- engine과 동시 변경 필수. 중간 상태에서 meta registry miss 발생함.
 
 ---
 
@@ -318,7 +325,76 @@ kjspringweb/
 
 ---
 
-## 16. 관련 프로젝트
+## 16. 섹터 9 구현 확정 (2026-05-05 완료)
+
+### LOG_OFF 전환 + trace 차단
+
+- `LogReadyNotifier.sendWithRetry()` 최종 실패 → `stateHolder.markLogOff()` + queue.clear() + return false
+- `runLoop()` false 반환 시 break + finally `clearWorkerIfCurrent()` (worker 레퍼런스 null 처리)
+- `RuntimeMethodBridge.enter()`: `context == null`(신규 trace)일 때만 LOG_OFF 체크 → no-op
+  - 진행 중인 trace는 LOG_OFF 전환 이후에도 stack 정합성 유지
+- `RuntimeMethodBridge.exitUnsafe()` root flush: `holder == null || holder.isLogOn()` 일 때만 write
+
+### `/agent/resume` 구현 구조
+
+```
+[Tomcat ApplicationFilterChain#doFilter 앞단 선점]
+  TomcatFilterChainInterceptTransformer  ← ASM COMPUTE_FRAMES + SafeClassWriter
+    → AgentHttpBridge.safeIntercept(req, res): boolean  ← keep ABI
+         not installed → return false (필터체인 정상 흐름)
+         /agent/resume (POST, exact match) → AgentInternalRouter.handle() → return true → doFilter RETURN
+         그 외 → return false (필터체인 정상 흐름, Spring Security 거침)
+
+[DispatcherServlet#doDispatch 앞단 — 일반 요청]
+  SpringWebRequestTransformer
+    → AgentHttpBridge.safeEnterOrHandle(req, res): boolean
+         /agent/resume → AgentInternalRouter.handle() → return true → doDispatch RETURN (도달 안 함)
+         그 외 → HttpRequestContextBridge.safeEnter(req) → return false → 기존 흐름
+
+AgentInternalRouter (package-private, 난독화 가능)
+  install(): serverCommitHash → logReadyNotifier → stateHolder (마지막 대입 = volatile 가시성 플래그)
+  isInstalled(): 3개 필드 모두 non-null 체크
+  isInternalRequest(): POST + normalizeUri() + exact equals "/agent/resume"
+  → ResumeHandler.handle(req, res)
+
+ResumeHandler (package-private, 난독화 가능)
+  command 검증 (RESUME_LOGGING 아니면 INVALID_COMMAND + LOG_OFF)
+  commitHash optional 비교 (없으면 pass, 불일치 COMMIT_MISMATCH + LOG_OFF)
+  성공: markLogOn() + logReadyNotifier.start() + LOG_ON 응답
+```
+
+### 응답 계약 (HTTP 200 고정)
+
+| 상황 | body |
+|------|------|
+| LOG_ON 성공 | `{"state":"LOG_ON","serverCommitHash":"..."}` |
+| commitHash 불일치 | `{"state":"LOG_OFF","reason":"COMMIT_MISMATCH","serverCommitHash":"..."}` |
+| command 오류 | `{"state":"LOG_OFF","reason":"INVALID_COMMAND"}` |
+| 내부 처리 실패 | `{"state":"LOG_OFF","reason":"RESUME_HANDLE_FAILED"}` |
+
+### commitHash 처리 정책
+
+- 엔진 resume body: `{"command":"RESUME_LOGGING","reason":"engine-recovered"}` — commitHash 없음
+- 서버: commitHash optional — 없으면 무조건 LOG_ON, 있으면 서버 hash와 비교
+
+### hijack 방지 (검증 완료)
+
+- `/agent/resume` (정확 경로) → 에이전트 선점 ✓
+- `/api/agent/resume` 등 다른 경로 → 필터체인 통과 → Spring Security 처리 (302)  ✓
+
+### 난독화 keep 대상
+
+```
+AgentHttpBridge.install(AgentStateHolder, String, LogReadyNotifier)
+AgentHttpBridge.safeIntercept(Object, Object): boolean
+AgentHttpBridge.safeEnterOrHandle(Object, Object): boolean
+RuntimeMethodBridge.*
+HttpRequestContextBridge.*
+```
+
+---
+
+## 17. 관련 프로젝트
 
 | 프로젝트 | 역할 |
 |----------|------|
@@ -328,13 +404,13 @@ kjspringweb/
 
 ---
 
-## 17. 작업 규칙 (2026-03-28)
+## 18. 작업 규칙 (2026-03-28)
 
 - CLAUDE.md 수정: Claude 자율 허용
 - 나머지 파일 수정: 금지 (오빠 명시적 지시 시에만)
 - Claude 역할: GPT 제안 딴지/보완안 채팅 제시만
 - 코드 수정 실행: GPT(Codex) 담당
 
-## 18. 작업 프로토콜
+## 19. 작업 프로토콜
 
 `work_protocol.md` 참고 (GPT + Claude 핑퐁 방식 동일 적용)

@@ -4,6 +4,7 @@ import com.turtlepick.agent.core.config.AgentConfig;
 import com.turtlepick.agent.core.http.CompletedTraceFile;
 import com.turtlepick.agent.core.http.EngineLogReadyClient;
 import com.turtlepick.agent.core.http.LogReadyResponse;
+import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.util.AgentLog;
 
 import java.util.concurrent.BlockingQueue;
@@ -18,19 +19,21 @@ public final class LogReadyNotifier {
     private final EngineLogReadyClient client;
     private final AgentConfig config;
     private final String commitHash;
+    private final AgentStateHolder stateHolder;
     private volatile Thread worker;
 
-    public LogReadyNotifier(EngineLogReadyClient client, AgentConfig config, String commitHash) {
+    public LogReadyNotifier(EngineLogReadyClient client, AgentConfig config, String commitHash,
+                            AgentStateHolder stateHolder) {
         this.client = client;
         this.config = config;
         this.commitHash = commitHash;
+        this.stateHolder = stateHolder;
     }
 
     public synchronized void start() {
-        if (worker != null) {
+        if (worker != null && worker.isAlive()) {
             return;
         }
-
         Thread thread = new Thread(this::runLoop, "turtlepick-log-ready-notifier");
         thread.setDaemon(true);
         worker = thread;
@@ -49,6 +52,9 @@ public final class LogReadyNotifier {
         if (trimmedFileName == null) {
             return;
         }
+        if (!stateHolder.isLogOn()) {
+            return;
+        }
 
         CompletedTraceFile file = new CompletedTraceFile(
                 config.getAgentServerId(),
@@ -57,28 +63,42 @@ public final class LogReadyNotifier {
         );
         if (!queue.offer(file)) {
             AgentLog.warn("log_ready queue full fileName=" + trimmedFileName);
+            return;
         }
+        start();
     }
 
     private void runLoop() {
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                CompletedTraceFile file = queue.take();
-                sendWithRetry(file);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                break;
-            } catch (Throwable t) {
-                AgentLog.warn("log_ready worker skipped cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    CompletedTraceFile file = queue.take();
+                    if (!sendWithRetry(file)) {
+                        break;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Throwable t) {
+                    AgentLog.warn("log_ready worker skipped cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+                }
             }
+        } finally {
+            clearWorkerIfCurrent(Thread.currentThread());
         }
     }
 
-    private void sendWithRetry(CompletedTraceFile file) {
+    private synchronized void clearWorkerIfCurrent(Thread current) {
+        if (worker == current) {
+            worker = null;
+        }
+    }
+
+    private boolean sendWithRetry(CompletedTraceFile file) {
         LogReadyResponse response = client.send(file, config);
         if (response != null && response.isAccepted()) {
             AgentLog.info("log_ready ok fileName=" + file.getFileName() + " " + response.toLogDetail());
-            return;
+            return true;
         }
 
         try {
@@ -86,16 +106,21 @@ public final class LogReadyNotifier {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             AgentLog.warn("log_ready retry skipped fileName=" + file.getFileName() + " cause=INTERRUPTED");
-            return;
+            return true;
         }
 
         response = client.send(file, config);
         if (response != null && response.isAccepted()) {
             AgentLog.info("log_ready retry ok fileName=" + file.getFileName() + " " + response.toLogDetail());
-        } else {
-            AgentLog.warn("log_ready failed fileName=" + file.getFileName()
-                    + " " + (response == null ? "reason=NO_RESPONSE" : response.toLogDetail()));
+            return true;
         }
+
+        AgentLog.warn("log_ready failed fileName=" + file.getFileName()
+                + " " + (response == null ? "reason=NO_RESPONSE" : response.toLogDetail()));
+        stateHolder.markLogOff();
+        queue.clear();
+        AgentLog.warn("agent state LOG_OFF reason=LOG_READY_FAILED");
+        return false;
     }
 
     private String trimToNull(String value) {

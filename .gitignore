@@ -39,6 +39,8 @@ out/
 
 logs/
 turtlepick-logs/
+.claude/
+server-test*.log
 *.out.log
 *.err.log
 *-stdout.log

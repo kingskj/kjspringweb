@@ -12,12 +12,14 @@ import com.turtlepick.agent.core.http.LogReadyJsonCodec;
 import com.turtlepick.agent.core.http.MetaJsonCodec;
 import com.turtlepick.agent.core.instrument.ApplicationMethodTransformer;
 import com.turtlepick.agent.core.instrument.SpringWebRequestTransformer;
+import com.turtlepick.agent.core.instrument.TomcatFilterChainInterceptTransformer;
 import com.turtlepick.agent.core.instrument.MethodProbeIndex;
 import com.turtlepick.agent.core.instrument.MethodProbeIndexBuilder;
 import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointRegistry;
 import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
+import com.turtlepick.agent.core.trace.AgentHttpBridge;
 import com.turtlepick.agent.core.trace.ErrorArgCaptureOptions;
 import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
 import com.turtlepick.agent.core.trace.LogReadyNotifier;
@@ -71,6 +73,7 @@ public final class AgentPremain {
                 return;
             }
 
+            RuntimeMethodBridge.installStateHolder(stateHolder);
             RuntimeMethodBridge.installEndpointResolver(new EndpointResolver(endpointRegistry));
             RuntimeMethodBridge.installErrorMetaOptions(config.getUserFramePackages());
             RuntimeMethodBridge.installErrorArgOptions(new ErrorArgCaptureOptions(
@@ -78,7 +81,8 @@ public final class AgentPremain {
                     config.getErrorArgsMaxLength(),
                     config.getErrorArgsExcludeClasses()
             ));
-            LogReadyNotifier logReadyNotifier = new LogReadyNotifier(logReadyClient, config, result.getCommitHash());
+            LogReadyNotifier logReadyNotifier = new LogReadyNotifier(logReadyClient, config, result.getCommitHash(), stateHolder);
+            AgentHttpBridge.install(stateHolder, result.getCommitHash(), logReadyNotifier);
             logReadyNotifier.start();
             TraceLogWriter.install(
                     config.getLoggingDir(),
@@ -91,6 +95,7 @@ public final class AgentPremain {
 
             inst.addTransformer(new ApplicationMethodTransformer(probeIndex), false);
             if (config.isInstrumentationHttp()) {
+                inst.addTransformer(new TomcatFilterChainInterceptTransformer(), false);
                 inst.addTransformer(new SpringWebRequestTransformer(), false);
             }
 
