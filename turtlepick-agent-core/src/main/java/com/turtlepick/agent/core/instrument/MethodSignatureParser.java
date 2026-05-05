@@ -14,16 +14,19 @@ public final class MethodSignatureParser {
         int hashIndex = trimmed.indexOf('#');
         int openParenIndex = trimmed.indexOf('(', hashIndex + 1);
         int closeParenIndex = trimmed.lastIndexOf(')');
+        int returnSeparatorIndex = closeParenIndex < 0 ? -1 : trimmed.indexOf(':', closeParenIndex + 1);
 
-        if (hashIndex <= 0 || openParenIndex <= hashIndex || closeParenIndex <= openParenIndex) {
+        if (hashIndex <= 0 || openParenIndex <= hashIndex || closeParenIndex <= openParenIndex
+                || returnSeparatorIndex != closeParenIndex + 1) {
             throw new IllegalArgumentException("invalid fqcnMethod: " + fqcnMethod);
         }
 
         String className = trimmed.substring(0, hashIndex).trim();
         String methodName = trimmed.substring(hashIndex + 1, openParenIndex).trim();
         String paramBody = trimmed.substring(openParenIndex + 1, closeParenIndex);
+        String returnTypeName = trimmed.substring(returnSeparatorIndex + 1).trim();
 
-        if (className.length() == 0 || methodName.length() == 0) {
+        if (className.length() == 0 || methodName.length() == 0 || returnTypeName.length() == 0) {
             throw new IllegalArgumentException("invalid fqcnMethod: " + fqcnMethod);
         }
 
@@ -39,6 +42,6 @@ public final class MethodSignatureParser {
             }
         }
 
-        return new ParsedMethodSignature(trimmed, className, methodName, paramTypeNames);
+        return new ParsedMethodSignature(trimmed, className, methodName, paramTypeNames, returnTypeName);
     }
 }

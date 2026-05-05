@@ -24,7 +24,8 @@ public final class MethodProbeIndexBuilder {
                         parsed.getFqcnMethod(),
                         parsed.getClassName(),
                         parsed.getMethodName(),
-                        parsed.getParamTypeNames()
+                        parsed.getParamTypeNames(),
+                        parsed.getReturnTypeName()
                 );
 
                 List<MethodProbeSpec> specs = byClassName.get(parsed.getClassName());

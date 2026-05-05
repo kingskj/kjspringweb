@@ -21,13 +21,14 @@ public final class MethodProbeIndex {
         return byClassName.containsKey(className);
     }
 
-    public MethodProbeSpec find(String className, String methodName, Type[] argumentTypes) {
+    public MethodProbeSpec find(String className, String methodName, Type[] argumentTypes, Type returnType) {
         List<MethodProbeSpec> specs = byClassName.get(className);
         if (specs == null || specs.isEmpty()) {
             return null;
         }
 
         List<String> runtimeParamTypes = toCanonicalParamTypes(argumentTypes);
+        String runtimeReturnType = toCanonicalTypeName(returnType);
         MethodProbeSpec matched = null;
 
         for (int i = 0; i < specs.size(); i++) {
@@ -36,6 +37,9 @@ public final class MethodProbeIndex {
                 continue;
             }
             if (!sameParams(spec.getParamTypeNames(), runtimeParamTypes)) {
+                continue;
+            }
+            if (!spec.getReturnTypeName().equals(runtimeReturnType)) {
                 continue;
             }
             if (matched != null) {

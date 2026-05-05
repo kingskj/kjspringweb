@@ -36,7 +36,7 @@ public final class ApplicationClassVisitor extends ClassVisitor {
             return methodVisitor;
         }
 
-        MethodProbeSpec spec = probeIndex.find(className, name, Type.getArgumentTypes(descriptor));
+        MethodProbeSpec spec = probeIndex.find(className, name, Type.getArgumentTypes(descriptor), Type.getReturnType(descriptor));
         if (spec == null) {
             return methodVisitor;
         }
