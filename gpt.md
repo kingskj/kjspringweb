@@ -1845,3 +1845,215 @@ turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,j
   - `agent-smoke.err.log`
   - `*.pid` 루트 직접 생성
 - 테스트 명령을 새로 만들 때는 먼저 출력 경로가 루트인지 확인한다. 루트 파일명 리다이렉션이면 실행하지 않는다.
+
+## 117) 2026-05-09 문서 재확인 메모
+- 사용자 요청에 따라 현재 저장소 `D:\workspace\kjspringweb`의 `gpt.md`, `work_protocol.md`, `CLAUDE.md`, `docs/*.md`를 다시 확인했다.
+- 이어서 `D:\workspace\turtlepick`의 `gpt.md`, `CLAUDE.md`, `work_protocol.md`, `docs/*.md` 목록과 주요 문서 내용을 확인했다.
+- 현재 작업 모드는 계속 명시적 확정 전 제안/분석 중심이다. `확정. 반영.` 또는 `검토 완료. 확정. 수정해` 전에는 `gpt.md` 외 코드/문서 수정 금지 원칙을 유지한다.
+- 양쪽 문서 기준 현재 다음 큰 우선순위는 `fqcn_method v2` 완료 이후의 Repository inherited methodId/meta 확장이다.
+- `turtlepick/docs/작업지시문_20260503.md` 기준 다음 단위는 서버 agent meta request `repositories[]`, 엔진 `repositoryMethods[]`, inherited Repository methodId 발번/저장/응답, agent 별도 registry 적재까지이며, Repository AOP/DAO args/SQL 캡처는 범위 밖이다.
+
+## 118) 2026-05-09 레거시 Spring 대상 서버 계획 메모
+- 사용자 최신 방향: 지금부터 할 일은 엔진 작업이 아니라, 현재 Boot 기반 대상 서버와 별개로 **레거시 Spring 기반 대상 서버를 하나 더 만드는 것**이다.
+- 현재 `kjspringweb`는 Spring Boot 4.0.2 + Java 17 + Thymeleaf + Security + Batch + JPA(H2) 기반이며, TurtlePick agent 검증용 Boot 대상 서버 역할을 한다.
+- 새 레거시 서버는 Boot 기능 복제가 목적이 아니라, TurtlePick agent의 비-Boot/레거시 Spring 호환성을 검증하는 별도 표본으로 설계하는 것이 맞다.
+- 우선 후보는 별도 프로젝트 또는 별도 디렉터리의 `kjspringweb-legacy`이며, WAR + Spring MVC 5.x + javax.servlet + XML 또는 Java Config 혼합 + H2/JPA 또는 MyBatis 기반을 검토한다.
+- 테스트 가치가 큰 차이점:
+  - `@SpringBootApplication` 없음
+  - Boot auto-configuration 없음
+  - 외장 Tomcat 또는 provided servlet API 기반 WAR
+  - `javax.servlet` 경로
+  - XML web.xml / DispatcherServlet / Spring Security filter chain
+  - 레거시 Repository/DAO 패턴(MyBatis XML 또는 구형 Spring Data JPA)
+
+## 119) 2026-05-09 `kjspringweb-legacy` 골격 생성 완료
+- 사용자 지시에 따라 `D:\workspace\kjspringweb-legacy`에 레거시 Spring 대상 서버 껍데기를 생성했다.
+- 확정 기준은 하한 호환성 검증을 위해 `Java 8 bytecode + Spring MVC 4.3.30.RELEASE + Spring Security 4.2.20.RELEASE + MyBatis 3.5.16 + H2 1.4.200 + WAR + javax.servlet 3.1 + web.xml/XML bean` 조합이다.
+- 생성 구조:
+  - `build.gradle`, `settings.gradle`, `.gitignore`, `README.md`
+  - `src/main/webapp/WEB-INF/web.xml`
+  - `application-context.xml`, `dispatcher-servlet.xml`, `security-context.xml`
+  - JSP view 3개(`home/index.jsp`, `home/login.jsp`, `home/detail.jsp`)
+  - `HomeController`, `BoardLegacyController`, `BoardLegacyService`, `BoardLegacyMapper`, `BoardLegacy`, MyBatis XML mapper
+  - `schema.sql`, `data.sql`, `logback.xml`
+- Gradle 9 계열 wrapper(`D:\workspace\kjspringweb\gradlew.bat -p D:\workspace\kjspringweb-legacy clean war`)로 빌드 검증 완료.
+- 산출물: `D:\workspace\kjspringweb-legacy\build\libs\kjspringweb-legacy-0.0.1-SNAPSHOT.war`
+- 현재 PC 상태:
+  - 기본 JDK/Javac는 17.
+  - Java 8은 JRE(`C:\Program Files\Java\jre1.8.0_461`)만 존재.
+  - 이번 레거시 프로젝트는 JDK 17 `options.release = 8`로 Java 8 호환 바이트코드 빌드 후, 필요 시 Java 8 JRE 런타임 검증으로 진행한다.
+- 다음 작업은 `D:\workspace\kjspringweb-legacy`로 작업 기준을 옮겨 외장 Tomcat 실행 또는 Cargo/Gretty류 없이 수동 WAR 배포 검증 방식을 정하는 것이다.
+
+## 120) 2026-05-09 `kjspringweb-legacy` SQLite/세션 인증 전환
+- 사용자 지시에 따라 `D:\workspace\kjspringweb-legacy` DB를 H2에서 SQLite로 변경했다.
+- 현재 레거시 프로젝트 기준은 `Java 8 bytecode + Spring MVC 4.3.30.RELEASE + Spring Security 4.2.20.RELEASE + MyBatis 3.5.16 + SQLite JDBC 3.36.0.3 + WAR + javax.servlet 3.1 + web.xml/XML bean`이다.
+- `build.gradle`에서 H2 의존성을 제거하고 `org.xerial:sqlite-jdbc:3.36.0.3`을 추가했다.
+- `application-context.xml` datasource:
+  - driver: `org.sqlite.JDBC`
+  - url: `jdbc:sqlite:${legacy.sqlite.path:kjspringweb-legacy.db}`
+  - 외장 Tomcat 실행 시 `-Dlegacy.sqlite.path=...`로 DB 위치를 지정할 수 있다.
+- `schema.sql`/`data.sql`은 SQLite 파일 DB 재기동을 고려해 `create table if not exists`, `where not exists` 기반 seed로 바꿨다.
+- 인증은 JWT/토큰이 아니라 Spring Security 4.x의 서버 세션 기반 form-login으로 명시했다.
+  - `create-session="ifRequired"`
+  - `<session-management invalid-session-url="/login"/>`
+- `D:\workspace\kjspringweb-legacy\README.md`도 한글 문서로 정리했고, SQLite/세션 인증 기준을 반영했다.
+- 검증: `D:\workspace\kjspringweb\gradlew.bat -p D:\workspace\kjspringweb-legacy clean war` 성공.
+
+## 121) 2026-05-09 `kjspringweb-legacy` Maven 전환
+- 사용자 방향에 따라 레거시 프로젝트답게 Gradle 대신 Maven 기반 WAR 프로젝트로 전환했다.
+- `D:\workspace\kjspringweb-legacy\pom.xml`을 생성했다.
+  - packaging: `war`
+  - Java source/target: `1.8`
+  - Spring MVC `4.3.30.RELEASE`
+  - Spring Security `4.2.20.RELEASE`
+  - MyBatis `3.5.16`
+  - SQLite JDBC `3.36.0.3`
+  - Servlet API `3.1.0` provided
+- 기존 `build.gradle`, `settings.gradle`은 삭제하지 않고 각각 `build.gradle.bak`, `settings.gradle.bak`로 이동했다.
+- README와 레거시 `gpt.md`도 Maven 기준으로 갱신했다.
+- 현재 PC에는 `mvn` CLI가 설치되어 있지 않아 `mvn clean package`는 아직 미실행이다.
+- 다음 결정점:
+  - 시스템 Maven을 설치해서 진짜 레거시 방식으로 갈지
+  - 아니면 재현성을 위해 Maven Wrapper(`mvnw`)를 추가할지 결정해야 한다.
+
+## 122) 2026-05-09 Maven/Tomcat 포터블 설치 완료
+- 사용자 지시 `설치해. 확정 반영`에 따라 Maven과 Tomcat을 전역 설치가 아니라 `D:\workspace\tools` 하위 포터블 설치로 구성했다.
+- 설치 경로:
+  - Maven: `D:\workspace\tools\apache-maven-3.9.9`
+  - Tomcat: `D:\workspace\tools\apache-tomcat-8.5.100`
+  - 다운로드 zip: `D:\workspace\tools\downloads`
+- 검증:
+  - `D:\workspace\tools\apache-maven-3.9.9\bin\mvn.cmd -version`으로 Apache Maven 3.9.9 확인.
+  - `CATALINA_HOME`/`CATALINA_BASE`를 `D:\workspace\tools\apache-tomcat-8.5.100`으로 지정 후 `catalina.bat version`으로 Apache Tomcat/8.5.100 확인.
+  - `D:\workspace\tools\apache-maven-3.9.9\bin\mvn.cmd -f D:\workspace\kjspringweb-legacy\pom.xml clean package` 성공.
+- Maven WAR 산출물:
+  - `D:\workspace\kjspringweb-legacy\target\kjspringweb-legacy.war`
+- 아직 미수행:
+  - Tomcat에 WAR 배포 후 `/login` 접속 검증.
+  - Tomcat JVM에 TurtlePick `-javaagent` 부착 검증.
+
+## 123) 2026-05-09 `kjspringweb-legacy` 기능 구현 및 smoke 검증
+- 사용자 지시:
+  - `kjspringweb`에서 테스트하지 못하는 것을 테스트하기 위한 환경 구성 프로젝트로 진행.
+  - `kjspringweb`에 없는 기능 위주.
+  - 일부러 에러 내기 쉬운 구조.
+  - 화면단 validation 없음.
+  - 구성/화면/흐름은 Codex가 자율 설계.
+  - Kafka 등 무거운 인프라는 1GB/2코어 서버 스펙상 제외.
+- 구현 방향:
+  - Kafka 대체로 가벼운 DB queue 사용.
+  - 파일 dropbox 처리.
+  - 서버 세션 기반 작업함.
+  - SQLite 제약/서비스 파싱/MyBatis XML 오류로 관측 가능한 실패 유도.
+- 추가 기능:
+  - `/ops`: 벤더/재고/DB queue 운영 실험실.
+  - `/settlements`: 서버 세션 기반 정산 작업함.
+  - `/file-import`: 파일 manifest 등록 및 dropbox 처리.
+- 주요 에러 유도:
+  - 숫자 파싱 실패: `creditLimit=abc`, `amount=abc`, `expectedRows=abc`.
+  - SQLite 제약 실패: UNIQUE/NOT NULL/CHECK.
+  - MyBatis raw SQL 실패: `/ops?sortColumn=...`가 `${sortColumn}`로 들어감.
+  - DB queue 강제 실패: `forceErrorCode=NPE|SQL|NEGATIVE_STOCK`.
+  - 파일 처리 실패: 파일 없음, row count mismatch.
+- 구현 파일군은 `D:\workspace\kjspringweb-legacy\gpt.md` 11번에 상세 기록했다.
+- 검증:
+  - `D:\workspace\tools\apache-maven-3.9.9\bin\mvn.cmd -f D:\workspace\kjspringweb-legacy\pom.xml clean package` 성공.
+  - Tomcat 8.5.100 별도 base `D:\workspace\kjspringweb-legacy\runtime\tomcat-base`, 18080 포트로 WAR 배포 성공.
+  - `/kjspringweb-legacy/login` HTTP 200 및 form 확인.
+  - `user/password` 세션 로그인 후 `/kjspringweb-legacy/ops` HTTP 200 확인.
+  - `/ops/vendors`에 `creditLimit=abc` POST 시 `NumberFormatException` 에러 화면 노출 확인.
+  - 검증용 Tomcat은 종료 완료. 18080 리슨 없음.
+- 아직 미수행:
+  - TurtlePick agent `-javaagent`를 Tomcat JVM에 붙인 레거시 계측 검증.
+
+## 124) 2026-05-09 `kjspringweb-legacy` 운영형 서버 로그 반영
+- 사용자 지시에 따라 레거시 프로젝트 서버 로그를 콘솔 전용에서 운영형 날짜별 파일 로그로 변경했다.
+- 변경 파일:
+  - `D:\workspace\kjspringweb-legacy\src\main\resources\logback.xml`
+  - `HomeController.java` 접근 INFO 로그 추가.
+  - `LegacyErrorController.java` ERROR 로그 추가.
+- 로그 정책:
+  - 기본 경로: `D:\workspace\kjspringweb-legacy\logs\app`
+  - JVM 옵션: `-Dlegacy.log.path=...`
+  - `legacy-app.log`: INFO 이상 현재 로그.
+  - `legacy-app.%d{yyyy-MM-dd}.log`: 일자별 일반 로그, 14일 보관.
+  - `legacy-error.log`: ERROR 이상 현재 로그.
+  - `legacy-error.%d{yyyy-MM-dd}.log`: 일자별 에러 로그, 30일 보관.
+- 검증:
+  - Maven `clean package` 성공.
+  - Tomcat smoke에서 `/kjspringweb-legacy/login` HTTP 200 확인.
+  - `legacy-app.log`에 `legacy login page requested` INFO 로그 기록 확인.
+  - 검증용 Tomcat 종료 완료.
+
+## 125) 2026-05-09 `kjspringweb-legacy` 매일 에러 패턴 배치 추가
+- 사용자 질문에 따라 매일 패턴별로 에러를 터뜨리는 레거시 배치를 추가했다.
+- Spring Boot Batch가 아니라 레거시 Spring `task:scheduled` 기반으로 구현했다.
+- 추가 파일:
+  - `D:\workspace\kjspringweb-legacy\src\main\java\com\kjweb\legacy\batch\LegacyErrorPatternBatch.java`
+  - `D:\workspace\kjspringweb-legacy\src\main\java\com\kjweb\legacy\web\controller\BatchLabController.java`
+- 설정:
+  - `application-context.xml`에 `task` namespace, `legacyTaskScheduler`, `<task:scheduled-tasks>` 추가.
+  - cron: `0 35 3 * * *` (매일 03:35)
+- 패턴:
+  - `dayOfMonth % 5 == 0`: vendor duplicate UNIQUE 실패.
+  - `== 1`: inventory negative CHECK 실패.
+  - `== 2`: job status `BROKEN_STATUS` CHECK 실패.
+  - `== 3`: `NumberFormatException`.
+  - `== 4`: `NullPointerException`.
+- `/ops` 화면에 수동 실행 form을 추가했다.
+  - `daily`, `duplicate`, `inventory`, `status`, `number`, `npe`
+- 검증:
+  - Maven `clean package` 성공.
+  - Tomcat smoke에서 context 초기화 성공.
+  - 로그인 후 `/ops` HTTP 200.
+  - `/ops` 화면에 `Daily Error Batch Manual Trigger` 노출 확인.
+  - 검증용 Tomcat 종료 완료.
+
+## 126) 2026-05-09 `kjspringweb-legacy` GitHub 공개 저장소 업로드
+- 사용자 요청에 따라 `D:\workspace\kjspringweb-legacy`를 별도 Git 저장소로 초기화하고 GitHub 공개 저장소에 업로드했다.
+- 저장소 URL: `https://github.com/kingskj/kjspringweb-legacy`
+- 브랜치: `main`
+- 첫 커밋: `2eaf278 Initial legacy Spring test app`
+- 공개 업로드 전 점검:
+  - `.gitignore`에 `target/`, `runtime/`, `logs/`, `.gradle/`, `.vscode/`, DB/로그/키 파일 패턴을 포함했다.
+  - `runtime`, `logs`, `target`, `.gradle` 등 실행 산출물은 추적 대상에서 제외했다.
+  - 민감 문자열 검색 결과 실제 키/API 토큰류는 없고 테스트 계정(`user/password`, `admin/admin`)만 확인했다.
+- 원격 상태:
+  - `origin`: `https://github.com/kingskj/kjspringweb-legacy.git`
+  - 로컬 `main`이 `origin/main`을 추적한다.
+
+## 127) 2026-05-09 `kjspringweb-legacy` Java 8 release/SQLite/Async 개선 반영
+- Gemini 분석에 대한 사용자 지시 `확정 반영`으로 레거시 프로젝트 개선 3가지를 반영했다.
+- 대상 저장소: `D:\workspace\kjspringweb-legacy`
+- 반영 내용:
+  - `pom.xml`: Maven compiler를 `<release>8</release>`로 변경해 JDK 17 빌드 시 Java 9+ API 누수를 컴파일 단계에서 차단.
+  - `application-context.xml`: SQLite URL에 `journal_mode=WAL`, `busy_timeout=5000` 추가.
+  - `web.xml`: `springSecurityFilterChain`, `DispatcherServlet`에 `<async-supported>true</async-supported>` 추가.
+  - `AsyncLabController` 신규 추가: `/async-lab/callable`, `/async-lab/callable-error`, `/async-lab/deferred`, `/async-lab/deferred-error`.
+  - `README.md`, 레거시 `gpt.md`에 반영 목적과 검증 경로 기록.
+- 검증:
+  - `D:\workspace\tools\apache-maven-3.9.9\bin\mvn.cmd -f D:\workspace\kjspringweb-legacy\pom.xml clean package` 성공.
+  - 컴파일 로그에서 `javac [debug release 8]` 확인.
+  - Tomcat 8.5.100 runtime base를 새 WAR로 재배포하고 18080 smoke 수행.
+  - 로그인 후 async success 2개는 HTTP 200/본문 확인.
+  - async error 2개는 `Legacy Error Observed` 에러 화면과 메시지 노출 확인.
+
+## 128) 2026-05-09 `kjspringweb-legacy` JSP 화면 정리
+- 사용자 요청으로 레거시 프로젝트의 화면을 기본 HTML 수준에서 정리했다.
+- 대상 저장소: `D:\workspace\kjspringweb-legacy`
+- 방향:
+  - 테스트베드 성격과 화면단 validation 없음 원칙은 유지.
+  - 공통 CSS를 추가해 레이아웃, 네비게이션, 폼, 테이블, 에러 화면만 정돈.
+- 추가 파일:
+  - `src/main/webapp/resources/css/legacy.css`
+- 변경 JSP:
+  - `home/login.jsp`, `home/index.jsp`, `home/detail.jsp`
+  - `ops/dashboard.jsp`
+  - `settlement/index.jsp`
+  - `fileimport/index.jsp`
+  - `error/legacy-error.jsp`
+- 검증:
+  - Maven `clean package` 성공.
+  - Tomcat 8.5.100 runtime base에 새 WAR 재배포.
+  - 로그인 후 `/`, `/ops`, `/settlements`, `/file-import`, `/legacy/boards/1` HTTP 200.
+  - 각 화면의 CSS 링크 및 `/resources/css/legacy.css` HTTP 200 확인.
