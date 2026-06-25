@@ -1,27 +1,21 @@
 package com.turtlepick.agent.core.trace;
 
-import com.turtlepick.agent.core.state.AgentStateHolder;
-
 import java.lang.reflect.Method;
 
 final class AgentInternalRouter {
 
     private static final String RESUME_SUFFIX = "/agent/resume";
-    private static volatile AgentStateHolder stateHolder;
-    private static volatile String serverCommitHash;
-    private static volatile LogReadyNotifier logReadyNotifier;
+    private static volatile AgentRuntimeController runtimeController;
 
     private AgentInternalRouter() {
     }
 
     static boolean isInstalled() {
-        return stateHolder != null && serverCommitHash != null && logReadyNotifier != null;
+        return runtimeController != null;
     }
 
-    static void install(AgentStateHolder holder, String commitHash, LogReadyNotifier notifier) {
-        serverCommitHash = commitHash;
-        logReadyNotifier = notifier;
-        stateHolder = holder;
+    static void install(AgentRuntimeController controller) {
+        runtimeController = controller;
     }
 
     static boolean isInternalRequest(Object request) throws Exception {
@@ -36,14 +30,18 @@ final class AgentInternalRouter {
     }
 
     static void handle(Object request, Object response) throws Exception {
-        new ResumeHandler(stateHolder, serverCommitHash, logReadyNotifier).handle(request, response);
+        new ResumeHandler(runtimeController).handle(request, response);
     }
 
     static void writeFailure(Object response) {
         try {
-            stateHolder.markLogOff();
+            AgentRuntimeController controller = runtimeController;
+            String serverCommitHash = controller == null ? null : controller.getServerCommitHash();
+            if (controller != null) {
+                controller.markLogOff();
+            }
             String json = "{\"state\":\"LOG_OFF\",\"reason\":\"RESUME_HANDLE_FAILED\""
-                    + ",\"serverCommitHash\":\"" + serverCommitHash + "\"}";
+                    + ",\"serverCommitHash\":\"" + nullToEmpty(serverCommitHash) + "\"}";
             ResumeHandler.writeJson(response, json);
         } catch (Throwable ignored) {
         }
@@ -67,5 +65,9 @@ final class AgentInternalRouter {
         if (normalized.isEmpty()) return "/";
         if (normalized.charAt(0) != '/') normalized = "/" + normalized;
         return normalized;
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

@@ -1,7 +1,6 @@
 package com.turtlepick.agent.core;
 
 import com.turtlepick.agent.core.bootstrap.AgentBootstrapService;
-import com.turtlepick.agent.core.bootstrap.BootstrapResult;
 import com.turtlepick.agent.core.config.AgentConfig;
 import com.turtlepick.agent.core.config.TurtlepickConfigLoader;
 import com.turtlepick.agent.core.git.GitCommandRunner;
@@ -20,10 +19,9 @@ import com.turtlepick.agent.core.state.EndpointRegistry;
 import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
 import com.turtlepick.agent.core.trace.AgentHttpBridge;
+import com.turtlepick.agent.core.trace.AgentRuntimeController;
 import com.turtlepick.agent.core.trace.ErrorArgCaptureOptions;
 import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
-import com.turtlepick.agent.core.trace.LogReadyNotifier;
-import com.turtlepick.agent.core.trace.TraceLogWriter;
 import com.turtlepick.agent.core.util.AgentLog;
 
 import java.io.File;
@@ -63,16 +61,6 @@ public final class AgentPremain {
                     engineMetaClient
             );
 
-            BootstrapResult result = bootstrapService.bootstrap(config);
-            if (!result.isSuccess()) {
-                AgentLog.warn("meta log_off"
-                        + " status=" + result.getStatus()
-                        + " agentId=" + result.getAgentId()
-                        + " commitHash=" + result.getCommitHash()
-                        + " reason=" + result.getReason());
-                return;
-            }
-
             RuntimeMethodBridge.installStateHolder(stateHolder);
             RuntimeMethodBridge.installEndpointResolver(new EndpointResolver(endpointRegistry));
             RuntimeMethodBridge.installErrorMetaOptions(config.getUserFramePackages());
@@ -81,28 +69,49 @@ public final class AgentPremain {
                     config.getErrorArgsMaxLength(),
                     config.getErrorArgsExcludeClasses()
             ));
-            LogReadyNotifier logReadyNotifier = new LogReadyNotifier(logReadyClient, config, result.getCommitHash(), stateHolder);
-            AgentHttpBridge.install(stateHolder, result.getCommitHash(), logReadyNotifier);
-            logReadyNotifier.start();
-            TraceLogWriter.install(
-                    config.getLoggingDir(),
-                    config.getRollingIntervalMinutes(),
-                    result.getCommitHash(),
-                    config.isVerboseFieldNames(),
-                    logReadyNotifier);
-            MethodProbeIndex probeIndex =
-                    new MethodProbeIndexBuilder().build(methodMappingRegistry.snapshot());
 
-            inst.addTransformer(new ApplicationMethodTransformer(probeIndex), false);
+            ApplicationMethodTransformer applicationTransformer =
+                    new ApplicationMethodTransformer(MethodProbeIndex.empty());
+            boolean retransformSupported = inst.isRetransformClassesSupported();
+            inst.addTransformer(applicationTransformer, retransformSupported);
+            if (!retransformSupported) {
+                AgentLog.warn("method probe retransform disabled cause=JVM_NOT_SUPPORTED");
+            }
+
+            AgentRuntimeController runtimeController = new AgentRuntimeController(
+                    inst,
+                    config,
+                    bootstrapService,
+                    stateHolder,
+                    methodMappingRegistry,
+                    endpointRegistry,
+                    logReadyClient,
+                    applicationTransformer,
+                    new MethodProbeIndexBuilder());
+            AgentHttpBridge.install(runtimeController);
+
             if (config.isInstrumentationHttp()) {
                 inst.addTransformer(new TomcatFilterChainInterceptTransformer(), false);
                 inst.addTransformer(new SpringWebRequestTransformer(), false);
             }
 
+            AgentRuntimeController.ActivationResult result = runtimeController.bootstrapAndActivate();
+            if (!result.isSuccess()) {
+                AgentLog.warn("meta log_off"
+                        + " status=" + result.getStatus()
+                        + " agentId=" + result.getAgentId()
+                        + " commitHash=" + result.getServerCommitHash()
+                        + " reason=" + result.getReason()
+                        + " resumeReceiver=true");
+                return;
+            }
+
             AgentLog.info("method probe installed"
-                    + " commitHash=" + result.getCommitHash()
+                    + " commitHash=" + result.getServerCommitHash()
                     + " methodCount=" + result.getMethodCount()
                     + " endpointCount=" + result.getEndpointCount()
+                    + " retransformTransformed=" + result.getRetransformSummary().getTransformed()
+                    + " retransformFailed=" + result.getRetransformSummary().getFailed()
                     + " httpInstrumentation=" + config.isInstrumentationHttp());
         } catch (Throwable t) {
             AgentLog.error("startup failed; agent disabled", t);

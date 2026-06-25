@@ -2057,3 +2057,24 @@ turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,j
   - Tomcat 8.5.100 runtime base에 새 WAR 재배포.
   - 로그인 후 `/`, `/ops`, `/settlements`, `/file-import`, `/legacy/boards/1` HTTP 200.
   - 각 화면의 CSS 링크 및 `/resources/css/legacy.css` HTTP 200 확인.
+
+## 129) 2026-06-25 TurtlePick agent meta recovery/retransform 반영
+- 사용자 지시 `확정 반영`으로 COMMIT_NOT_INDEXED/engine down 복구를 위한 agent runtime 경로를 반영했다.
+- 핵심 문제:
+  - 기존 `AgentPremain`은 bootstrap meta 실패 시 조기 `return`해서 `/agent/resume` 수신기와 method transformer가 설치되지 않았다.
+  - resume으로 LOG_ON만 해도 이미 로드된 Controller/Service 클래스에는 probe가 없어 trace가 재개되지 않는 구조였다.
+- 반영 내용:
+  - `ApplicationMethodTransformer`를 빈 `MethodProbeIndex`로 premain 초기에 등록하고, `Can-Retransform-Classes=true` manifest로 변경.
+  - `AgentRuntimeController`를 추가해 bootstrap/reload meta, probe index 교체, loaded class retransform, LOG_ON 전환을 한 곳에서 관리.
+  - `AgentBootstrapService`는 meta 적재까지만 담당하고 성공 시 직접 `LOG_ON` 하지 않도록 변경.
+  - `AgentHttpBridge`/`AgentInternalRouter`/`ResumeHandler`를 controller 기반으로 변경해 bootstrap 실패 후에도 `/agent/resume` 수신 가능.
+  - `RESUME_LOGGING`, `RELOAD_META` 요청 시 meta를 재요청하고 성공 후 retransform 수행.
+  - 같은 commit 재활성화는 기존 `LogReadyNotifier`/`TraceLogWriter`를 재사용해 현재 trace 파일 강제 close와 불필요한 log_ready를 만들지 않도록 처리.
+- 검증:
+  - `..\gradlew.bat shadowJar` 성공.
+  - 산출 jar manifest에서 `Can-Retransform-Classes: true` 확인.
+  - 정상 bootstrap: `agent state LOG_ON reason=BOOTSTRAP`, trace 생성 확인.
+  - 수동 `/agent/resume`: HTTP 200, `retransformTransformed=18`, `retransformFailed=0` 확인.
+  - engine down 상태에서 kjspringweb 선기동: `meta log_off ... HTTP_ERROR:ConnectException resumeReceiver=true`, 서버 `/auth/login` HTTP 200 확인.
+  - 이후 engine 기동: engine startup git sync 후 RESUME 전송, agent `LOG_ON reason=RESUME_LOGGING`, `retransformTransformed=18`, `failed=0` 확인.
+  - 복구 후 `/auth/login` 요청 trace가 `turtlepick-logs/trace-202606251121.log`에 기록됨.

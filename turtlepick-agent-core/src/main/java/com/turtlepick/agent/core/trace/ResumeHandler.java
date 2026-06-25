@@ -1,6 +1,5 @@
 package com.turtlepick.agent.core.trace;
 
-import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.util.AgentLog;
 
 import java.io.InputStream;
@@ -8,14 +7,10 @@ import java.lang.reflect.Method;
 
 final class ResumeHandler {
 
-    private final AgentStateHolder stateHolder;
-    private final String serverCommitHash;
-    private final LogReadyNotifier logReadyNotifier;
+    private final AgentRuntimeController runtimeController;
 
-    ResumeHandler(AgentStateHolder stateHolder, String serverCommitHash, LogReadyNotifier notifier) {
-        this.stateHolder = stateHolder;
-        this.serverCommitHash = serverCommitHash;
-        this.logReadyNotifier = notifier;
+    ResumeHandler(AgentRuntimeController runtimeController) {
+        this.runtimeController = runtimeController;
     }
 
     void handle(Object request, Object response) throws Exception {
@@ -23,31 +18,35 @@ final class ResumeHandler {
         String command = extractJsonString(body, "command");
         String requestedHash = extractJsonString(body, "commitHash");
 
-        if (!"RESUME_LOGGING".equals(command)) {
-            stateHolder.markLogOff();
+        if (!"RESUME_LOGGING".equals(command) && !"RELOAD_META".equals(command)) {
+            runtimeController.markLogOff();
             AgentLog.warn("resume rejected reason=INVALID_COMMAND command=" + command);
-            writeJson(response, buildResponse("LOG_OFF", "INVALID_COMMAND"));
+            writeJson(response, buildResponse(AgentRuntimeController.ActivationResult.failure(
+                    runtimeController.getServerCommitHash(), "LOG_OFF", "INVALID_COMMAND", null, command)));
             return;
         }
 
-        if (requestedHash != null && !requestedHash.isEmpty()
-                && !requestedHash.equals(serverCommitHash)) {
-            stateHolder.markLogOff();
-            AgentLog.warn("resume rejected reason=COMMIT_MISMATCH requested=" + requestedHash);
-            writeJson(response, buildResponse("LOG_OFF", "COMMIT_MISMATCH"));
-            return;
-        }
-
-        stateHolder.markLogOn();
-        logReadyNotifier.start();
-        AgentLog.info("agent state LOG_ON reason=RESUME");
-        writeJson(response, "{\"state\":\"LOG_ON\",\"serverCommitHash\":\"" + serverCommitHash + "\"}");
+        AgentRuntimeController.ActivationResult result =
+                runtimeController.reloadMetaAndActivate(command, requestedHash);
+        writeJson(response, buildResponse(result));
     }
 
-    private String buildResponse(String state, String reason) {
-        return "{\"state\":\"" + state + "\""
-                + ",\"reason\":\"" + reason + "\""
-                + ",\"serverCommitHash\":\"" + serverCommitHash + "\"}";
+    private String buildResponse(AgentRuntimeController.ActivationResult result) {
+        AgentRuntimeController.RetransformSummary summary = result.getRetransformSummary();
+        StringBuilder builder = new StringBuilder();
+        builder.append("{\"state\":\"").append(result.isSuccess() ? "LOG_ON" : "LOG_OFF").append("\"");
+        appendJsonField(builder, "reason", result.getReason());
+        appendJsonField(builder, "status", result.getStatus());
+        appendJsonField(builder, "trigger", result.getTrigger());
+        appendJsonField(builder, "serverCommitHash", result.getServerCommitHash());
+        appendJsonField(builder, "agentId", result.getAgentId());
+        builder.append(",\"methodCount\":").append(result.getMethodCount());
+        builder.append(",\"endpointCount\":").append(result.getEndpointCount());
+        builder.append(",\"retransformTransformed\":").append(summary.getTransformed());
+        builder.append(",\"retransformSkipped\":").append(summary.getSkipped());
+        builder.append(",\"retransformFailed\":").append(summary.getFailed());
+        builder.append("}");
+        return builder.toString();
     }
 
     static void writeJson(Object response, String json) throws Exception {
@@ -95,5 +94,57 @@ final class ResumeHandler {
         int q2 = json.indexOf('"', q1 + 1);
         if (q2 < 0) return null;
         return json.substring(q1 + 1, q2);
+    }
+
+    private void appendJsonField(StringBuilder builder, String key, String value) {
+        builder.append(",\"").append(key).append("\":");
+        if (value == null) {
+            builder.append("null");
+            return;
+        }
+        builder.append("\"").append(escapeJson(value)).append("\"");
+    }
+
+    private String escapeJson(String value) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            switch (ch) {
+                case '"':
+                    builder.append("\\\"");
+                    break;
+                case '\\':
+                    builder.append("\\\\");
+                    break;
+                case '\b':
+                    builder.append("\\b");
+                    break;
+                case '\f':
+                    builder.append("\\f");
+                    break;
+                case '\n':
+                    builder.append("\\n");
+                    break;
+                case '\r':
+                    builder.append("\\r");
+                    break;
+                case '\t':
+                    builder.append("\\t");
+                    break;
+                default:
+                    if (ch < 0x20) {
+                        String hex = Integer.toHexString(ch);
+                        builder.append("\\u");
+                        for (int j = hex.length(); j < 4; j++) {
+                            builder.append('0');
+                        }
+                        builder.append(hex);
+                    } else {
+                        builder.append(ch);
+                    }
+                    break;
+            }
+        }
+        return builder.toString();
     }
 }

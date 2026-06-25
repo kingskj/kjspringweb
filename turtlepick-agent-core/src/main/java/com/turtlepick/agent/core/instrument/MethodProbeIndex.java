@@ -8,8 +8,12 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class MethodProbeIndex {
+
+    private static final MethodProbeIndex EMPTY =
+            new MethodProbeIndex(Collections.<String, List<MethodProbeSpec>>emptyMap());
 
     private final Map<String, List<MethodProbeSpec>> byClassName;
 
@@ -17,8 +21,16 @@ public final class MethodProbeIndex {
         this.byClassName = Collections.unmodifiableMap(new HashMap<String, List<MethodProbeSpec>>(byClassName));
     }
 
+    public static MethodProbeIndex empty() {
+        return EMPTY;
+    }
+
     public boolean containsClass(String className) {
         return byClassName.containsKey(className);
+    }
+
+    public Set<String> classNames() {
+        return byClassName.keySet();
     }
 
     public MethodProbeSpec find(String className, String methodName, Type[] argumentTypes, Type returnType) {

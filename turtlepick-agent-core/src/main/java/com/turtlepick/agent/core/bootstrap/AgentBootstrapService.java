@@ -60,7 +60,6 @@ public final class AgentBootstrapService {
             if (response.getEndpoints().isEmpty()) {
                 AgentLog.warn("meta ok but endpoints empty commitHash=" + commitHash);
             }
-            stateHolder.markLogOn();
             return BootstrapResult.success(
                     commitHash,
                     response.getStatus(),

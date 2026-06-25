@@ -1,6 +1,5 @@
 package com.turtlepick.agent.core.trace;
 
-import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.util.AgentLog;
 
 public final class AgentHttpBridge {
@@ -8,8 +7,8 @@ public final class AgentHttpBridge {
     private AgentHttpBridge() {
     }
 
-    public static void install(AgentStateHolder holder, String commitHash, LogReadyNotifier notifier) {
-        AgentInternalRouter.install(holder, commitHash, notifier);
+    public static void install(AgentRuntimeController runtimeController) {
+        AgentInternalRouter.install(runtimeController);
     }
 
     public static boolean safeIntercept(Object request, Object response) {
@@ -44,6 +43,11 @@ public final class AgentHttpBridge {
     }
 
     public static boolean safeEnterOrHandle(Object request, Object response) {
+        if (!AgentInternalRouter.isInstalled()) {
+            HttpRequestContextBridge.safeEnter(request);
+            return false;
+        }
+
         boolean internal;
         try {
             internal = AgentInternalRouter.isInternalRequest(request);

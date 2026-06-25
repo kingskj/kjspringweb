@@ -1,5 +1,6 @@
 package com.turtlepick.agent.core.instrument;
 
+import com.turtlepick.agent.core.util.AgentLog;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
@@ -9,10 +10,16 @@ import java.security.ProtectionDomain;
 
 public final class ApplicationMethodTransformer implements ClassFileTransformer {
 
-    private final MethodProbeIndex probeIndex;
+    private volatile MethodProbeIndex probeIndex;
 
     public ApplicationMethodTransformer(MethodProbeIndex probeIndex) {
-        this.probeIndex = probeIndex;
+        this.probeIndex = probeIndex == null ? MethodProbeIndex.empty() : probeIndex;
+    }
+
+    public MethodProbeIndex updateIndex(MethodProbeIndex nextProbeIndex) {
+        MethodProbeIndex previous = probeIndex;
+        probeIndex = nextProbeIndex == null ? MethodProbeIndex.empty() : nextProbeIndex;
+        return previous == null ? MethodProbeIndex.empty() : previous;
     }
 
     @Override
@@ -30,16 +37,30 @@ public final class ApplicationMethodTransformer implements ClassFileTransformer 
             return null;
         }
 
+        MethodProbeIndex index = probeIndex;
         String fqcn = className.replace('/', '.');
-        if (!probeIndex.containsClass(fqcn)) {
+        if (!index.containsClass(fqcn)) {
             return null;
         }
 
-        ClassReader reader = new ClassReader(classfileBuffer);
-        ClassWriter writer = new SafeClassWriter(reader, loader);
-        ClassVisitor visitor = new ApplicationClassVisitor(writer, probeIndex, fqcn);
-        reader.accept(visitor, ClassReader.EXPAND_FRAMES);
-        return writer.toByteArray();
+        try {
+            ClassReader reader = new ClassReader(classfileBuffer);
+            ClassWriter writer = new SafeClassWriter(reader, loader);
+            ClassVisitor visitor = new ApplicationClassVisitor(writer, index, fqcn);
+            reader.accept(visitor, ClassReader.EXPAND_FRAMES);
+            return writer.toByteArray();
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("method probe transform skipped className=" + fqcn
+                    + " cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+            return null;
+        }
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        return throwable.getMessage() == null ? "" : throwable.getMessage();
     }
 
     private static final class SafeClassWriter extends ClassWriter {

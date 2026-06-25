@@ -40,7 +40,7 @@ shadowJar {
         attributes(
             'Premain-Class': 'com.turtlepick.agent.core.AgentPremain',
             'Can-Redefine-Classes': 'false',
-            'Can-Retransform-Classes': 'false',
+            'Can-Retransform-Classes': 'true',
             'Implementation-Title': 'turtlepick-agent-core',
             'Implementation-Version': project.version
         )

@@ -174,7 +174,40 @@ kjspringweb/
 
 ---
 
-## 13. 다음 과제 (2026-05-05 기준)
+## 13. 완료된 것 (2026-06-25 세션)
+
+### agent bootstrap 실패 후 resume 수신부 유지 + retransform 복구
+
+**문제**: 엔진 다운 상태에서 agent bootstrap 시 meta 실패 → `AgentPremain` 조기 return → `AgentHttpBridge` / `TomcatFilterChainInterceptTransformer` 미설치 → 엔진 복구 후 `RESUME_LOGGING` 수신 불가. 또한 bootstrap 실패 시 `ApplicationMethodTransformer` 미등록 → resume 후 meta 재요청 성공해도 trace 안 찍힘.
+
+**수정 파일**:
+- `AgentPremain.java` — bootstrap 결과와 무관하게 `ApplicationMethodTransformer(empty, canRetransform=true)`, `AgentHttpBridge.install(runtimeController)`, Tomcat/Spring hook 먼저 등록. 실패 시 `resumeReceiver=true` 로그 후 return
+- `AgentRuntimeController.java` (신규) — `Instrumentation` 생성자 주입. `bootstrapAndActivate()` / `reloadMetaAndActivate(trigger, expectedHash)`. `synchronized(lock)` 동시 reload 방지. `ensureLogReadyNotifier()`: 동일 commit → 재사용, 다른 commit → shutdown + TraceLogWriter 재설치. `retransformLoadedClasses()`: previousIndex ∪ nextIndex class 대상, 개별 try-catch + VMError/ThreadDeath re-throw
+- `ApplicationMethodTransformer.java` — `volatile MethodProbeIndex` + `updateIndex(next)` 이전 index 반환
+- `MethodProbeIndex.java` — `empty()` static factory, `classNames()` dot FQCN keySet 반환
+- `ResumeHandler.java` — `AgentRuntimeController` 위임으로 교체. `RESUME_LOGGING`/`RELOAD_META` 양쪽 수신. retransform 결과 JSON 응답 포함
+- `build.gradle` — `Can-Retransform-Classes: true` manifest 추가
+
+**실기동 검증 (2026-06-25)**:
+- 엔진 다운 선기동: `meta log_off ... resumeReceiver=true` ✅
+- 엔진 기동 후 RESUME 수신: `LOG_ON reason=RESUME_LOGGING retransformTransformed=18 failed=0` ✅
+- 복구 후 trace 파일 생성 ✅
+
+**난독화 keep 대상 변경**:
+```
+AgentHttpBridge.install(AgentRuntimeController)   ← 시그니처 변경
+AgentHttpBridge.safeIntercept(Object, Object): boolean
+AgentHttpBridge.safeEnterOrHandle(Object, Object): boolean
+RuntimeMethodBridge.*
+HttpRequestContextBridge.*
+AgentRuntimeController.reloadMetaAndActivate(String, String)
+AgentRuntimeController.markLogOff()
+AgentRuntimeController.getServerCommitHash()
+```
+
+---
+
+## 13-1. 다음 과제 (2026-06-25 기준)
 
 ### 서버 agent — 섹터 9 완료. 다음은 엔진 선행 후 진행
 
