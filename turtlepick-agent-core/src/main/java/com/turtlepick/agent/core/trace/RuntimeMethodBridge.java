@@ -2,8 +2,11 @@ package com.turtlepick.agent.core.trace;
 
 import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointResolver;
+import com.turtlepick.agent.core.state.InterfaceMethodRegistry;
 import com.turtlepick.agent.core.state.ResolvedEndpoint;
 import com.turtlepick.agent.core.util.AgentLog;
+
+import java.lang.reflect.Method;
 
 public final class RuntimeMethodBridge {
 
@@ -14,6 +17,7 @@ public final class RuntimeMethodBridge {
 
     private static volatile AgentStateHolder agentStateHolder;
     private static volatile EndpointResolver endpointResolver;
+    private static volatile InterfaceMethodRegistry interfaceMethodRegistry;
     private static volatile String[] userFramePackages = EMPTY_PACKAGES;
     private static volatile ErrorArgCaptureOptions errorArgOptions = DEFAULT_ARG_OPTIONS;
 
@@ -26,6 +30,58 @@ public final class RuntimeMethodBridge {
 
     public static void installEndpointResolver(EndpointResolver resolver) {
         endpointResolver = resolver;
+    }
+
+    public static void installInterfaceMethodRegistry(InterfaceMethodRegistry registry) {
+        interfaceMethodRegistry = registry;
+    }
+
+    public static int enterInterfaceMethod(Object proxy, Method method) {
+        try {
+            InterfaceMethodRegistry registry = interfaceMethodRegistry;
+            if (registry == null || registry.isEmpty()) {
+                return 0;
+            }
+            if (TraceContextHolder.get() == null) {
+                return 0;
+            }
+            InterfaceMethodRegistry.Match match = registry.lookup(proxy, method);
+            if (match == null) {
+                return 0;
+            }
+            enter(match.getMethodId(), match.getFqcnMethod());
+            return match.getMethodId();
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("interface method enter failed cause=" + t.getClass().getSimpleName());
+            return 0;
+        }
+    }
+
+    public static int enterDeclaredInterfaceMethod(Method method) {
+        try {
+            InterfaceMethodRegistry registry = interfaceMethodRegistry;
+            if (registry == null || registry.isDeclaredEmpty()) {
+                return 0;
+            }
+            if (TraceContextHolder.get() == null) {
+                return 0;
+            }
+            InterfaceMethodRegistry.Match match = registry.lookupDeclared(method);
+            if (match == null) {
+                return 0;
+            }
+            enter(match.getMethodId(), match.getFqcnMethod());
+            return match.getMethodId();
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("declared interface method enter failed cause=" + t.getClass().getSimpleName());
+            return 0;
+        }
     }
 
     public static void installErrorMetaOptions(String[] packages) {

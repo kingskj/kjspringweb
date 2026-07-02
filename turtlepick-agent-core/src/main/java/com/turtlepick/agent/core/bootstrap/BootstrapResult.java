@@ -9,6 +9,8 @@ public final class BootstrapResult {
     private final String agentId;
     private final int methodCount;
     private final int endpointCount;
+    private final int interfaceMethodCount;
+    private final int declaredMethodCount;
 
     public BootstrapResult(
             boolean success,
@@ -17,7 +19,9 @@ public final class BootstrapResult {
             String reason,
             String agentId,
             int methodCount,
-            int endpointCount) {
+            int endpointCount,
+            int interfaceMethodCount,
+            int declaredMethodCount) {
         this.success = success;
         this.commitHash = commitHash;
         this.status = status;
@@ -25,6 +29,8 @@ public final class BootstrapResult {
         this.agentId = agentId;
         this.methodCount = methodCount;
         this.endpointCount = endpointCount;
+        this.interfaceMethodCount = interfaceMethodCount;
+        this.declaredMethodCount = declaredMethodCount;
     }
 
     public static BootstrapResult success(
@@ -32,12 +38,15 @@ public final class BootstrapResult {
             String status,
             String agentId,
             int methodCount,
-            int endpointCount) {
-        return new BootstrapResult(true, commitHash, status, null, agentId, methodCount, endpointCount);
+            int endpointCount,
+            int interfaceMethodCount,
+            int declaredMethodCount) {
+        return new BootstrapResult(true, commitHash, status, null, agentId,
+                methodCount, endpointCount, interfaceMethodCount, declaredMethodCount);
     }
 
     public static BootstrapResult failure(String commitHash, String status, String reason, String agentId) {
-        return new BootstrapResult(false, commitHash, status, reason, agentId, 0, 0);
+        return new BootstrapResult(false, commitHash, status, reason, agentId, 0, 0, 0, 0);
     }
 
     public boolean isSuccess() {
@@ -66,5 +75,13 @@ public final class BootstrapResult {
 
     public int getEndpointCount() {
         return endpointCount;
+    }
+
+    public int getInterfaceMethodCount() {
+        return interfaceMethodCount;
+    }
+
+    public int getDeclaredMethodCount() {
+        return declaredMethodCount;
     }
 }

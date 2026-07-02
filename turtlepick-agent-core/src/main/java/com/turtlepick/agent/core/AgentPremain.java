@@ -10,6 +10,8 @@ import com.turtlepick.agent.core.http.EngineLogReadyClient;
 import com.turtlepick.agent.core.http.LogReadyJsonCodec;
 import com.turtlepick.agent.core.http.MetaJsonCodec;
 import com.turtlepick.agent.core.instrument.ApplicationMethodTransformer;
+import com.turtlepick.agent.core.instrument.MyBatisMapperProxyTransformer;
+import com.turtlepick.agent.core.instrument.SpringAopProxyInvokeTransformer;
 import com.turtlepick.agent.core.instrument.SpringWebRequestTransformer;
 import com.turtlepick.agent.core.instrument.TomcatFilterChainInterceptTransformer;
 import com.turtlepick.agent.core.instrument.MethodProbeIndex;
@@ -17,6 +19,7 @@ import com.turtlepick.agent.core.instrument.MethodProbeIndexBuilder;
 import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointRegistry;
 import com.turtlepick.agent.core.state.EndpointResolver;
+import com.turtlepick.agent.core.state.InterfaceMethodRegistry;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
 import com.turtlepick.agent.core.trace.AgentHttpBridge;
 import com.turtlepick.agent.core.trace.AgentRuntimeController;
@@ -48,6 +51,7 @@ public final class AgentPremain {
             AgentStateHolder stateHolder = new AgentStateHolder();
             MethodMappingRegistry methodMappingRegistry = new MethodMappingRegistry();
             EndpointRegistry endpointRegistry = new EndpointRegistry();
+            InterfaceMethodRegistry interfaceMethodRegistry = new InterfaceMethodRegistry();
             GitCommandRunner gitCommandRunner = new GitCommandRunner();
             GitCommitHashProvider commitHashProvider = new GitCommitHashProvider(gitCommandRunner);
             MetaJsonCodec metaJsonCodec = new MetaJsonCodec();
@@ -57,12 +61,14 @@ public final class AgentPremain {
                     stateHolder,
                     methodMappingRegistry,
                     endpointRegistry,
+                    interfaceMethodRegistry,
                     commitHashProvider,
                     engineMetaClient
             );
 
             RuntimeMethodBridge.installStateHolder(stateHolder);
             RuntimeMethodBridge.installEndpointResolver(new EndpointResolver(endpointRegistry));
+            RuntimeMethodBridge.installInterfaceMethodRegistry(interfaceMethodRegistry);
             RuntimeMethodBridge.installErrorMetaOptions(config.getUserFramePackages());
             RuntimeMethodBridge.installErrorArgOptions(new ErrorArgCaptureOptions(
                     config.isErrorArgsEnabled(),
@@ -77,6 +83,8 @@ public final class AgentPremain {
             if (!retransformSupported) {
                 AgentLog.warn("method probe retransform disabled cause=JVM_NOT_SUPPORTED");
             }
+            inst.addTransformer(new SpringAopProxyInvokeTransformer(), false);
+            inst.addTransformer(new MyBatisMapperProxyTransformer(), false);
 
             AgentRuntimeController runtimeController = new AgentRuntimeController(
                     inst,
@@ -85,6 +93,7 @@ public final class AgentPremain {
                     stateHolder,
                     methodMappingRegistry,
                     endpointRegistry,
+                    interfaceMethodRegistry,
                     logReadyClient,
                     applicationTransformer,
                     new MethodProbeIndexBuilder());
@@ -110,6 +119,8 @@ public final class AgentPremain {
                     + " commitHash=" + result.getServerCommitHash()
                     + " methodCount=" + result.getMethodCount()
                     + " endpointCount=" + result.getEndpointCount()
+                    + " interfaceMethodCount=" + result.getInterfaceMethodCount()
+                    + " declaredMethodCount=" + result.getDeclaredMethodCount()
                     + " retransformTransformed=" + result.getRetransformSummary().getTransformed()
                     + " retransformFailed=" + result.getRetransformSummary().getFailed()
                     + " httpInstrumentation=" + config.isInstrumentationHttp());

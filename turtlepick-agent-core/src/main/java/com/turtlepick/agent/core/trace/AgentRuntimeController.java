@@ -9,6 +9,7 @@ import com.turtlepick.agent.core.instrument.MethodProbeIndex;
 import com.turtlepick.agent.core.instrument.MethodProbeIndexBuilder;
 import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointRegistry;
+import com.turtlepick.agent.core.state.InterfaceMethodRegistry;
 import com.turtlepick.agent.core.state.MethodMappingRegistry;
 import com.turtlepick.agent.core.util.AgentLog;
 
@@ -25,6 +26,7 @@ public final class AgentRuntimeController {
     private final AgentStateHolder stateHolder;
     private final MethodMappingRegistry methodMappingRegistry;
     private final EndpointRegistry endpointRegistry;
+    private final InterfaceMethodRegistry interfaceMethodRegistry;
     private final EngineLogReadyClient logReadyClient;
     private final ApplicationMethodTransformer applicationTransformer;
     private final MethodProbeIndexBuilder indexBuilder;
@@ -40,6 +42,7 @@ public final class AgentRuntimeController {
             AgentStateHolder stateHolder,
             MethodMappingRegistry methodMappingRegistry,
             EndpointRegistry endpointRegistry,
+            InterfaceMethodRegistry interfaceMethodRegistry,
             EngineLogReadyClient logReadyClient,
             ApplicationMethodTransformer applicationTransformer,
             MethodProbeIndexBuilder indexBuilder) {
@@ -49,6 +52,7 @@ public final class AgentRuntimeController {
         this.stateHolder = stateHolder;
         this.methodMappingRegistry = methodMappingRegistry;
         this.endpointRegistry = endpointRegistry;
+        this.interfaceMethodRegistry = interfaceMethodRegistry;
         this.logReadyClient = logReadyClient;
         this.applicationTransformer = applicationTransformer;
         this.indexBuilder = indexBuilder;
@@ -80,6 +84,7 @@ public final class AgentRuntimeController {
                 stateHolder.markLogOff();
                 methodMappingRegistry.clear();
                 endpointRegistry.clear();
+                interfaceMethodRegistry.clear();
                 AgentLog.warn("meta reload rejected reason=COMMIT_MISMATCH"
                         + " trigger=" + normalizedTrigger
                         + " requested=" + normalizedExpectedCommitHash
@@ -101,6 +106,8 @@ public final class AgentRuntimeController {
                     + " commitHash=" + resultCommitHash
                     + " methodCount=" + result.getMethodCount()
                     + " endpointCount=" + result.getEndpointCount()
+                    + " interfaceMethodCount=" + result.getInterfaceMethodCount()
+                    + " declaredMethodCount=" + result.getDeclaredMethodCount()
                     + " retransformTransformed=" + retransformSummary.getTransformed()
                     + " retransformSkipped=" + retransformSummary.getSkipped()
                     + " retransformFailed=" + retransformSummary.getFailed());
@@ -215,6 +222,8 @@ public final class AgentRuntimeController {
         private final String agentId;
         private final int methodCount;
         private final int endpointCount;
+        private final int interfaceMethodCount;
+        private final int declaredMethodCount;
         private final RetransformSummary retransformSummary;
 
         private ActivationResult(
@@ -226,6 +235,8 @@ public final class AgentRuntimeController {
                 String agentId,
                 int methodCount,
                 int endpointCount,
+                int interfaceMethodCount,
+                int declaredMethodCount,
                 RetransformSummary retransformSummary) {
             this.success = success;
             this.trigger = trigger;
@@ -235,6 +246,8 @@ public final class AgentRuntimeController {
             this.agentId = agentId;
             this.methodCount = methodCount;
             this.endpointCount = endpointCount;
+            this.interfaceMethodCount = interfaceMethodCount;
+            this.declaredMethodCount = declaredMethodCount;
             this.retransformSummary = retransformSummary == null
                     ? new RetransformSummary(0, 0, 0)
                     : retransformSummary;
@@ -242,18 +255,19 @@ public final class AgentRuntimeController {
 
         static ActivationResult success(BootstrapResult result, String trigger, RetransformSummary summary) {
             return new ActivationResult(true, trigger, result.getCommitHash(), result.getStatus(), null,
-                    result.getAgentId(), result.getMethodCount(), result.getEndpointCount(), summary);
+                    result.getAgentId(), result.getMethodCount(), result.getEndpointCount(),
+                    result.getInterfaceMethodCount(), result.getDeclaredMethodCount(), summary);
         }
 
         static ActivationResult failure(BootstrapResult result, String trigger) {
             return new ActivationResult(false, trigger, result.getCommitHash(), result.getStatus(), result.getReason(),
-                    result.getAgentId(), 0, 0, new RetransformSummary(0, 0, 0));
+                    result.getAgentId(), 0, 0, 0, 0, new RetransformSummary(0, 0, 0));
         }
 
         public static ActivationResult failure(String commitHash, String status, String reason,
                                                String agentId, String trigger) {
             return new ActivationResult(false, trigger, commitHash, status, reason, agentId,
-                    0, 0, new RetransformSummary(0, 0, 0));
+                    0, 0, 0, 0, new RetransformSummary(0, 0, 0));
         }
 
         public boolean isSuccess() {
@@ -286,6 +300,14 @@ public final class AgentRuntimeController {
 
         public int getEndpointCount() {
             return endpointCount;
+        }
+
+        public int getInterfaceMethodCount() {
+            return interfaceMethodCount;
+        }
+
+        public int getDeclaredMethodCount() {
+            return declaredMethodCount;
         }
 
         public RetransformSummary getRetransformSummary() {

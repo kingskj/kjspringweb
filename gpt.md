@@ -2078,3 +2078,138 @@ turtlepick.agent.error.args.exclude-classes=java.io.InputStream,java.io.Reader,j
   - engine down 상태에서 kjspringweb 선기동: `meta log_off ... HTTP_ERROR:ConnectException resumeReceiver=true`, 서버 `/auth/login` HTTP 200 확인.
   - 이후 engine 기동: engine startup git sync 후 RESUME 전송, agent `LOG_ON reason=RESUME_LOGGING`, `retransformTransformed=18`, `failed=0` 확인.
   - 복구 후 `/auth/login` 요청 trace가 `turtlepick-logs/trace-202606251121.log`에 기록됨.
+
+## 130) 2026-07-02 TurtlePick agent Step 1 구현 전 검토 메모
+- 오늘 작업 역할은 임시로 반전한다.
+  - Claude: 구현 담당.
+  - GPT/Codex: 검토, 딴지, 대안 제시 담당.
+- 다음 작업은 `D:\workspace\turtlepick\docs\작업지시문_20260625.md` Step 1, 즉 `kjspringweb` Boot/JPA agent core 닫기다.
+- 목표:
+  - 엔진이 이미 내려주는 `repositoryMethods[]` 28개를 agent가 파싱한다.
+  - `MemberRepository#findById()` / `BoardRepository#findById()` 같은 Spring Data JPA Repository 호출을 trace node로 기록한다.
+  - trace node의 `methodId`가 엔진의 `REPOSITORY_INHERITED` methodId와 일치해야 한다.
+- 현재 실제 코드 상태:
+  - 엔진 쪽 `RepositoryInheritedExtractor`, `MethodKind`, `RepositoryMethodEntry`, `repositoryMethods[]` 응답은 이미 구현되어 있다.
+  - agent 쪽에는 아직 `RepositoryMethodDto`, `InterfaceMethodRegistry`, `SpringAopProxyInvokeTransformer`, `MyBatisMapperProxyTransformer`가 없다.
+  - agent `MetaResponse` / `MetaJsonCodec`도 아직 `repositoryMethods[]`를 모른다.
+- Step 1 확정 보정 스펙:
+  - `InterfaceMethodRegistry`에는 Step 1에서 `repositoryMethods[]`만 적재한다.
+  - `methods[]` 적재는 Step 3 MyBatis mapper 처리 시점으로 미룬다. Service proxy 중복 trace 위험을 피하기 위함이다.
+  - registry key는 `{ownerFqcn}#{methodName}({runtimeParams})` 형식이다.
+  - Spring Data inherited method의 `Method#getDeclaringClass()`는 `MemberRepository`가 아니라 `CrudRepository`인 경우가 정상이다. 따라서 1차 declaringClass lookup miss는 실패가 아니다.
+  - Step 1의 주 경로는 `proxy.getClass().getInterfaces()` direct interface 순회다. 재귀 탐색은 넣지 않고 Step 3에서 재평가한다.
+  - 복수 hit 또는 duplicate key는 조용히 첫 값/마지막 값으로 선택하지 않는다. warn 후 null 또는 ambiguous 처리한다.
+  - build 단계 key collision에서 `Map#put`으로 마지막 값을 덮어쓰면 안 된다. 중복 key는 제거하거나 ambiguous marker로 처리해야 한다.
+  - `RuntimeMethodBridge.enterInterfaceMethod(proxy, method)`는 `Throwable` 방어를 한다. `VirtualMachineError` / `ThreadDeath`만 rethrow하고, 나머지는 warn 후 `0` 반환한다.
+  - registry miss는 로그를 남기지 않는다. Spring AOP infrastructure method 호출이 많아 로그 폭탄이 될 수 있다.
+  - `TraceContextHolder.get() == null`이면 repository proxy 호출은 no-op으로 `0` 반환한다. Repository는 root trace가 아니라 기존 Controller/Service trace의 child node여야 한다.
+  - Java 8 target을 유지한다. 신규 agent 코드는 `record`, `List.of`, `Map.of`, `var` 등을 쓰지 않는다.
+  - `SpringAopProxyInvokeTransformer`는 JDK proxy `org/springframework/aop/framework/JdkDynamicAopProxy#invoke`와 CGLIB `org/springframework/aop/framework/CglibAopProxy$DynamicAdvisedInterceptor#intercept`를 훅한다.
+  - ASM hook에서 `methodId` local은 try region 진입 전에 `ICONST_0` + `ISTORE`로 선초기화한다. exception handler는 `methodId > 0`일 때만 기존 `RuntimeMethodBridge.exit(methodId, throwable, args)`를 호출한다.
+  - transform hit 로그를 남긴다. 특히 JPA Repository는 JDK dynamic proxy가 핵심 경로이고 CGLIB는 보험 성격이다.
+- 구현안 검토 중 GPT/Codex 딴지:
+  - `SafeClassWriter` 공통화는 Step 1에서 하지 않는다. 기존 private inner class를 package-private으로 승격하면 변경 표면이 커진다. Step 1에서는 `SpringAopProxyInvokeTransformer` 내부 private class로 복제하는 쪽이 안전하다.
+  - `repositoryMethods[]`의 `runtimeParams`와 `returnType`은 계약상 핵심 필드다. 필드 누락을 조용히 empty로 삼으면 registry miss만 발생하므로 parse validation 또는 명시 warn이 필요하다.
+  - `repositoryMethods[]`가 비어 있어도 meta OK 자체를 실패로 보지는 않는다. 다만 Step 1 검증에서는 `interfaceMethodCount=28`을 기대한다.
+  - Spring proxy hook은 registry를 volatile로 조회하는 고정 bytecode라, premain 초기에 transformer가 등록되면 meta reload 때 Spring proxy class retransform은 필수는 아니다.
+- 검증 계획:
+  - `D:\workspace\kjspringweb\turtlepick-agent-core`에서 `..\gradlew.bat shadowJar` 성공.
+  - 산출 classfile major version 52 확인.
+  - 엔진 8081 기동 상태에서 새 agent jar로 kjspringweb 기동.
+  - agent 로그에서 `interfaceMethodCount=28` 및 JDK proxy hook transform hit 확인.
+  - `/auth/login`은 JPA 검증 endpoint로 쓰지 않는다.
+  - `/profile`, `/board/{id}`, `/admin/members` 중 실제 Repository 호출이 확실한 endpoint로 검증한다.
+  - trace 파일에서 `BoardRepository#findById(java.lang.Object)` 또는 `MemberRepository#findById(java.lang.Object)` node가 생성되는지 확인한다.
+  - 해당 node의 `methodId`가 엔진 DB의 `method_def.method_kind='REPOSITORY_INHERITED'` row와 일치하는지 확인한다.
+  - `/agent/resume` / `RELOAD_META` 이후 registry 재적재와 trace 유지도 확인한다.
+
+## 131) 2026-07-02 검증 선호 고정 - 실기동 E2E 우선
+- 사용자 최신 지시(2026-07-02): 기본 검증 선호는 단위 테스트 파일을 새로 만들어 테스트하는 방식보다, 대상 서버와 필요한 연동 서버를 실제로 띄워 HTTP 요청, trace/log, DB/meta를 대조하는 실기동 E2E 검증이다.
+- `kjspringweb` / TurtlePick agent 작업에서 우선 검증 형태:
+  - TurtlePick engine과 kjspringweb을 실제 프로세스로 기동한다.
+  - kjspringweb은 필요한 경우 `-javaagent`와 `-Dturtlepick.config=...`를 붙여 실행한다.
+  - 실제 endpoint 요청을 보내고, trace 파일, agent 로그, engine meta/DB row, HTTP 응답을 함께 대조한다.
+- 단위 테스트의 위치:
+  - 빌드 안정성, 좁은 회귀, parser/DTO 같은 순수 로직 확인용 보조 수단이다.
+  - javaagent, ASM, retransform, Spring proxy, `/agent/resume`, log-ready, repository/mapper trace처럼 런타임 결합이 핵심인 변경은 실기동 검증 없이는 완료로 표현하지 않는다.
+- 보고 원칙:
+  - 실기동을 수행했으면 사용한 포트, endpoint, trace 파일명, 핵심 로그, meta/DB 대조 결과를 남긴다.
+  - 실기동을 못 했으면 "미실행" 사유와 남은 검증 항목을 명시한다.
+
+## 132) 2026-07-02 agent-core Step 3 MyBatis MapperProxy hook 구현
+- 대상: `D:\workspace\kjspringweb\turtlepick-agent-core`.
+- 전제:
+  - 엔진 Step 2는 완료됐다. `extra-mapper-packages`로 legacy MyBatis mapper interface 메서드 18개가 `methods[]`에 `DECLARED`로 발번됨을 isolated engine 검증으로 확인했다.
+  - agent-core에는 이미 `methods[]`를 `InterfaceMethodRegistry.declaredMethods`로 적재하는 dormant 경계와 `RuntimeMethodBridge.enterDeclaredInterfaceMethod(Method)`가 있다.
+- 이번 반영:
+  - 신규:
+    - `MyBatisMapperProxyTransformer`
+    - `MyBatisMapperProxyClassVisitor`
+    - `MyBatisMapperProxyInvokeAdapter`
+  - 수정:
+    - `AgentPremain`에 `new MyBatisMapperProxyTransformer()` 등록.
+- 훅 대상:
+  - class: `org/apache/ibatis/binding/MapperProxy`
+  - method: `invoke(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;`
+  - descriptor는 `java.lang.reflect.InvocationHandler` 계약이라 MyBatis 3.x 버전별 분기를 넣지 않는다.
+- 구현 불변식:
+  - Spring AOP hook은 계속 `enterInterfaceMethod(proxy, method)`만 호출한다.
+  - MyBatis MapperProxy hook만 `enterDeclaredInterfaceMethod(method)`를 호출한다.
+  - repository map과 declared map 경계를 섞지 않는다. 섞으면 Spring Service interface 중복 trace 위험이 있다.
+  - `MapperProxy` transformer는 `loader == null` skip과 `SafeClassWriter(reader, loader)` 패턴을 Spring AOP transformer와 동일하게 사용한다.
+  - ASM adapter는 `loadArg(1)`로 `Method`를 넘기고, exception exit에서는 `loadArg(2)`로 mapper args를 넘긴다.
+  - `methodId` local은 try region 전에 `0`으로 선초기화하고, `methodId > 0`일 때만 exit를 호출한다.
+- 빌드 검증:
+  - `..\gradlew.bat shadowJar` 성공.
+  - 신규 3개 class 모두 major version 52 확인.
+- 아직 남은 검증:
+  - legacy 외장 Tomcat E2E는 아직 미실행.
+  - 검증은 반드시 3단 게이트로 한다.
+    1. Controller node가 하나라도 뜨는지 확인한다. 실패하면 javax Tomcat FilterChain / HTTP context / DispatcherServlet / controller probe 쪽을 먼저 본다.
+    2. Service node가 Controller 아래 붙는지 확인한다.
+    3. Mapper node가 Service 아래 붙는지 확인한다. 여기서부터 MyBatis MapperProxy hook과 declaredMethods registry 매칭을 본다.
+- hardening 부채:
+  - `SafeClassWriter` 복사가 여러 transformer에 누적됐다.
+  - `SpringAopProxyInvokeAdapter`와 `MyBatisMapperProxyInvokeAdapter`는 enter 호출 한 줄만 다른 near-dup이다.
+  - Step 3 E2E가 닫힌 뒤 난독화/hardening 단계에서 공통화 여부를 별도로 판단한다.
+
+## 133) 2026-07-02 Boot/JPA agent Step 1 완료 기준 정리
+- 130번 섹션은 구현 전 검토 메모이고, 현재 종료 기준으로는 Boot/JPA agent Step 1이 완료된 상태다.
+- 목표:
+  - 엔진이 내려주는 `repositoryMethods[]`를 agent가 파싱한다.
+  - Spring Data JPA repository inherited method 호출을 trace node로 기록한다.
+  - repository trace node의 `methodId`가 엔진의 `REPOSITORY_INHERITED` methodId와 일치해야 한다.
+- 반영된 agent-core 구성:
+  - `RepositoryMethodDto`
+  - `MetaResponse` / `MetaJsonCodec` / `JsonCodecSupport`의 `repositoryMethods[]` 파싱
+  - `InterfaceMethodRegistry`
+  - `RuntimeMethodBridge.enterInterfaceMethod(Object proxy, Method method)`
+  - `SpringAopProxyInvokeTransformer`
+  - `SpringAopProxyClassVisitor`
+  - `SpringAopProxyInvokeAdapter`
+  - `AgentBootstrapService` / `AgentRuntimeController` / `AgentPremain` lifecycle 배선
+  - `BootstrapResult`에 `interfaceMethodCount` 및 이후 `declaredMethodCount` 계열 배선
+- Step 1 확정 동작:
+  - Spring AOP hook은 repository map만 조회한다.
+  - registry miss는 로그를 남기지 않는다.
+  - `TraceContext == null`이면 repository proxy 호출은 no-op이다. repository는 root trace가 아니라 Controller/Service 아래 child node여야 한다.
+  - duplicate/collision key는 조용히 임의 methodId를 선택하지 않는다.
+  - inherited repository method의 `Method#getDeclaringClass()`가 `CrudRepository` 등 상위 interface여도 정상이다. 주 경로는 proxy direct interfaces 순회다.
+  - JDK dynamic proxy가 핵심 경로이고 CGLIB hook은 보험 성격이다.
+- 실기동 E2E 검증 결과:
+  - agent bootstrap에서 `LOG_ON interfaceMethodCount=28` 확인.
+  - `POST /auth/join` 호출로 `MemberRepository#save` node가 생성됨을 확인.
+  - `MemberRepository#save` methodId `426083339`가 엔진 DB의 `REPOSITORY_INHERITED` row와 일치함을 확인.
+  - parent chain 확인:
+    - `AuthController#join`
+    - `MemberService#join`
+    - `MemberRepository#save`
+  - RESUME/RELOAD 후 registry 재적재와 repository trace 유지 확인.
+  - `/board`, `/board/1`, `/auth/login` 회귀 smoke 정상.
+- 남은 꼬리표:
+  - repository exception-exit 경로는 별도 실기동 확인이 필요하다.
+  - kjspringweb의 repository는 JDK dynamic proxy 경로라 CGLIB repository 실호출은 아직 확인하지 않았다.
+  - 이 두 항목은 Boot/JPA Step 1 완료를 막지는 않지만, hardening 전 추가 검증 후보로 둔다.
+- 현재 판정:
+  - Boot 대상 서버에서 Controller -> Service -> Repository trace skeleton은 닫혔다.
+  - 이후 MyBatis 작업은 같은 `turtlepick-agent-core`에 들어가지만, Boot/JPA 경로와는 registry/hook 경계를 분리한다.

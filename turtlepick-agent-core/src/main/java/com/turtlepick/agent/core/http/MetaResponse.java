@@ -12,6 +12,7 @@ public final class MetaResponse {
     private final String commitHash;
     private final List<MethodMapping> methods;
     private final List<EndpointInfo> endpoints;
+    private final List<RepositoryMethodDto> repositoryMethods;
 
     public MetaResponse(
             String status,
@@ -19,7 +20,8 @@ public final class MetaResponse {
             String agentId,
             String commitHash,
             List<MethodMapping> methods,
-            List<EndpointInfo> endpoints) {
+            List<EndpointInfo> endpoints,
+            List<RepositoryMethodDto> repositoryMethods) {
         this.status = status;
         this.reason = reason;
         this.agentId = agentId;
@@ -34,6 +36,12 @@ public final class MetaResponse {
         } else {
             this.endpoints = Collections.unmodifiableList(new ArrayList<EndpointInfo>(endpoints));
         }
+        if (repositoryMethods == null) {
+            this.repositoryMethods = Collections.emptyList();
+        } else {
+            this.repositoryMethods = Collections.unmodifiableList(
+                    new ArrayList<RepositoryMethodDto>(repositoryMethods));
+        }
     }
 
     public static MetaResponse logOff(String reason) {
@@ -43,7 +51,8 @@ public final class MetaResponse {
                 null,
                 null,
                 Collections.<MethodMapping>emptyList(),
-                Collections.<EndpointInfo>emptyList()
+                Collections.<EndpointInfo>emptyList(),
+                Collections.<RepositoryMethodDto>emptyList()
         );
     }
 
@@ -73,5 +82,9 @@ public final class MetaResponse {
 
     public List<EndpointInfo> getEndpoints() {
         return endpoints;
+    }
+
+    public List<RepositoryMethodDto> getRepositoryMethods() {
+        return repositoryMethods;
     }
 }

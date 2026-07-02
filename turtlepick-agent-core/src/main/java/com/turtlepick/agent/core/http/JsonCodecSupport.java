@@ -1,8 +1,40 @@
 package com.turtlepick.agent.core.http;
 
+import java.util.ArrayList;
+import java.util.List;
+
 final class JsonCodecSupport {
 
     private JsonCodecSupport() {
+    }
+
+    static List<String> readStringArrayField(String json, String fieldName, int startIndex, int endIndex) {
+        int valueStart = findFieldValueStart(json, fieldName, startIndex, endIndex);
+        if (valueStart < 0 || startsWith(json, valueStart, endIndex, "null")) {
+            return new ArrayList<String>();
+        }
+        if (json.charAt(valueStart) != '[') {
+            throw new IllegalArgumentException(fieldName + " is not an array");
+        }
+
+        int arrayEnd = findMatchingBracket(json, valueStart, endIndex, '[', ']');
+        List<String> result = new ArrayList<String>();
+
+        int index = valueStart + 1;
+        while (index < arrayEnd) {
+            index = skipWhitespaceAndComma(json, index, arrayEnd);
+            if (index >= arrayEnd) {
+                break;
+            }
+            if (json.charAt(index) != '"') {
+                throw new IllegalArgumentException(fieldName + " must contain strings");
+            }
+            int stringEnd = findStringEnd(json, index, arrayEnd);
+            result.add(readJsonString(json, index, stringEnd + 1));
+            index = stringEnd + 1;
+        }
+
+        return result;
     }
 
     static String readNullableStringField(String json, String fieldName, int startIndex, int endIndex) {

@@ -207,6 +207,119 @@ AgentRuntimeController.getServerCommitHash()
 
 ---
 
+## 13-2. Step 1 구현안 확정 대기 (2026-07-02 세션)
+
+### 세션 규칙
+- **이 세션 한정 역할 교체**: Claude가 구현/수정 담당, GPT가 검토/딴지 담당 (오빠 구두 지시. work_protocol.md 문서는 원본 유지)
+- **최우선 절대 규칙 재확정**: Claude가 허락 없이 반영 가능한 파일은 CLAUDE.md 하나뿐. 그 외 모든 파일은 "확정 반영" 문구 확인 후에만 적용. 대화 중 언급은 수정 지시가 아님.
+
+### 작업 대상
+`turtlepick/docs/작업지시문_20260625.md` **Step 1** — JPA Repository 호출을 trace node로 연결.
+엔진은 완료 상태 (`repositoryMethods[]` 28개 응답 확인). agent 쪽만 미착수.
+
+### 합의된 보정 스펙 (GPT 딴지 7개 + Claude 판정 완료)
+1. `InterfaceMethodRegistry`에는 Step 1에서 **repositoryMethods[]만 적재** — `methods[]` 적재는 Step 3(MyBatis)에서 mapper package 기준 생긴 뒤
+2. **TraceContext 없는 repository proxy 호출은 no-op** — root trace 생성 금지 (기동 시점 내부 호출 쓰레기 trace 방지)
+3. `enterInterfaceMethod`는 Throwable 방어 (VirtualMachineError/ThreadDeath만 re-throw), 실패 시 0 반환, **miss 무로그**
+4. **declaringClass 1차 miss는 정상 경로** — inherited method의 `Method.getDeclaringClass()`는 `CrudRepository`라 registry(owner=사용자 Repository) 1차 miss가 기본. 2차(proxy direct interfaces 순회)가 주 경로
+5. proxy interfaces 순회는 **direct만, 재귀 없음** (Step 1 확정. Step 3에서 재평가) — Spring Data JDK proxy는 direct에 repository interface 항상 포함
+6. hit 복수면 warn + null (조용히 첫 hit 선택 금지)
+7. ASM hook은 **methodId local을 try region 진입 전 ICONST_0으로 선초기화** (verifier 방어), 모든 exit에서 `methodId > 0` 체크
+8. Java 8 API만 (record/List.of/var 금지), shadowJar 후 classfile major version 52 확인
+9. JDK/CGLIB transform hit 로그 추가 (`aop proxy hook installed target=...`). JPA는 JDK proxy가 핵심, CGLIB은 보험
+
+### 구현안 핵심 결정 (상세안 대화창 출력 완료, 확정 대기)
+- **신규 4**: `http/RepositoryMethodDto`, `state/InterfaceMethodRegistry`, `instrument/SpringAopProxyInvokeTransformer`(+visitor/adapter), `JsonCodecSupport.readStringArrayField()`
+- **수정 7**: `MetaJsonCodec`(repositoryMethods 파싱), `MetaResponse`(필드 추가+logOff), `RuntimeMethodBridge`(installInterfaceMethodRegistry/enterInterfaceMethod), `AgentBootstrapService`(clear 4곳+replace), `BootstrapResult`(interfaceMethodCount), `AgentRuntimeController`(COMMIT_MISMATCH clear+로그), `AgentPremain`(조립+transformer 등록)
+- hook 대상 두 곳 모두 arg0=proxy/arg1=Method/arg2=Object[] 동일 → 어댑터 하나 공용:
+  - `JdkDynamicAopProxy.invoke`
+  - `CglibAopProxy$DynamicAdvisedInterceptor.intercept`
+- `SafeClassWriter`를 `SpringWebRequestTransformer` private inner에서 package-private으로 승격해 공유
+- **retransform 불필요 판단**: 훅 바이트코드는 registry 무관 고정(런타임 volatile 조회), premain에서 Spring 로드 전 transformer 등록 → 최초 로드 시 weave. meta reload는 registry swap만으로 반영 (지시문 2-4보다 단순화 — GPT 이견 시 재논의)
+- `enterInterfaceMethod` 체크 순서 = 성능 방어: registry empty → context null → 그 다음 suffix 문자열 생성
+- repositoryMethods empty는 실패 아님(warn만). methods empty만 기존대로 bootstrap 실패
+- exception exit의 args는 arg2(원본 대상 메서드 인자) 그대로 전달
+
+### 검증 계획
+1. shadowJar BUILD SUCCESSFUL + major version 52
+2. 기동 로그: `aop proxy hook installed target=...JdkDynamicAopProxy` + `interfaceMethodCount=28`
+3. `GET /board/{id}` (`/auth/login` 사용 금지) → trace node `m` == 엔진 DB `method_kind='REPOSITORY_INHERITED'`의 method_id
+4. Controller→Service→Repository parent chain 정상
+5. RELOAD_META 후 registry 재적재 + trace 유지
+6. 회귀: 기존 trace RESOLVED 유지
+
+### 2차 딴지 반영 델타 (2026-07-02, GPT 딴지 3개 판정 완료)
+1. **registry key collision (수용)**: build 단계에서 중복 key는 map 제거 + `ambiguousKeys` 로컬 set으로 재삽입 차단 + build 시 warn 1회. lookup은 무로그 miss (핫패스 로그 폭탄 방지 — lookup-time warn은 부분 수용으로 제외, GPT 이견 시 재논의)
+2. **SafeClassWriter 공통화 취소 (수용)**: `SpringAopProxyInvokeTransformer` 내 private 복사 (3번째 사본). 공통화는 Step 3 이후 별도 정리 항목
+3. **repositoryMethods 필드 검증 (수용, 방식 조정)**: 이름 휴리스틱 대신 `params`/`runtimeParams` **필드 존재 검증** (`findFieldValueStart < 0` → parse failure) + `returnType` 필수 검증. 빈 배열은 통과(findAll/count 정상), 필드 누락은 bootstrap 실패 → LOG_OFF로 명시화
+
+### 상태
+- **✅ Step 1 구현 + 실기동 E2E 완료 (2026-07-02, "확정. 반영." 트리거 후 Claude 직접 구현)**
+
+### 구현 결과 (2026-07-02)
+**신규 5파일**: `http/RepositoryMethodDto`, `state/InterfaceMethodRegistry`, `instrument/SpringAopProxyInvokeTransformer`(private SafeClassWriter 복사 포함), `instrument/SpringAopProxyClassVisitor`, `instrument/SpringAopProxyInvokeAdapter`
+**수정 8파일**: `JsonCodecSupport`(readStringArrayField), `MetaResponse`(repositoryMethods), `MetaJsonCodec`(파싱+필드존재검증), `RuntimeMethodBridge`(enterInterfaceMethod), `AgentBootstrapService`(clear 4곳+replace), `BootstrapResult`(interfaceMethodCount), `AgentRuntimeController`(주입+COMMIT_MISMATCH clear+로그), `AgentPremain`(조립+transformer 등록)
+
+### E2E 검증 결과 (2026-07-02, 서버 PID 94916 / 엔진 8081)
+- shadowJar BUILD SUCCESSFUL, 신규 클래스 5개 major version 52 ✅
+- `aop proxy hook installed target=JdkDynamicAopProxy` + `CglibAopProxy$DynamicAdvisedInterceptor` 둘 다 weave ✅
+- `agent state LOG_ON ... interfaceMethodCount=28` ✅
+- `POST /auth/join` → trace node `methodId=426083339` == 엔진 DB `MemberRepository#save(Member):Member` REPOSITORY_INHERITED ✅
+- parent chain: AuthController#join → MemberService#join → MemberRepository#save ✅
+- `RESUME_LOGGING` reload → `interfaceMethodCount=28` 재적재, `retransformTransformed=18 failed=0`, reload 후 2차 join에서도 repository node 유지 ✅
+- 회귀: `/board`, `/board/1`, `/auth/login` trace 정상, log_ready ACK 3회 연속 ✅
+
+### E2E 중 확인된 스펙 동작 (버그 아님)
+- `/board/1`(getDetail)은 `findByIdAndIsDeletedFalse` — **선언 쿼리 메서드**라 registry 미대상 → node 없음 (Step 1 스펙 정상. 선언 쿼리 메서드 trace는 후속 범위)
+- inherited 호출을 HTTP로 유발하는 확실한 경로: `POST /auth/join` → `memberRepository.save()` (CSRF 토큰 필요), `/admin/members` → `findAll()` (관리자 인증 필요)
+
+### 다음 작업 (Step 1 시점 기록 — 이후 진행은 13-3 참조)
+- Step 2: 엔진 `extra-mapper-packages` config + `BusinessLayerScanner` 보강 (turtlepick 쪽)
+- Step 3: kjspringweb-legacy `MyBatisMapperProxyTransformer` + 외장 Tomcat E2E
+
+---
+
+## 13-3. Step 3 진행 — MyBatis 대응 agent-core (2026-07-02 후반)
+
+> Step 2(엔진 MyBatis mapper 발번)는 turtlepick 쪽에서 완료. 여기는 **agent-core(부트/레거시 공용 JAR)** 쪽 Step 3.
+> **단일 코어 원칙**: agent-core는 JAR 1개. 부트/레거시가 사본을 갖는 게 아니라 실행 시 `-javaagent`로 같은 JAR 주입. servlet/spring/ibatis **import 0** (전부 ASM 문자열 매칭), javax+jakarta 동시 처리 → 서버 프레임워크 비종속. 타깃 부재 시 no-op이라 부트에 MyBatis 훅 얹어도 무해.
+
+### 단위 1 완료 — declaredMethods lookup 경계 분리 (dormant)
+MyBatis 훅 붙이기 전에 `methods[]` 기반 declared lookup 경로를 repository 경로와 분리.
+- `InterfaceMethodRegistry`: `repositoryMethods` map / `declaredMethods` map **분리**
+  - `replaceDeclaredMethods(List<MethodMapping>)` — `MethodSignatureParser.parse(fqcnMethod)` **재사용**(새 파서 금지)
+  - runtime key는 **source-form 타입명**(`java.lang.String[]`, `int[]`, primitive keyword) — `Class.getName()` descriptor form **금지**(array가 `[Ljava...;`로 나와 엔진 `java...[]`와 불일치 → silent miss). `toSourceTypeName(Class)` 헬퍼로 array 재귀 처리
+  - `lookupDeclared(Method)` — proxy 인자 없음. MyBatis는 `method.getDeclaringClass()`가 mapper interface 자신이라 declaringClass 직접 조회가 주 경로 (JPA와 반대)
+  - collision: build 시 중복 key 제거 + warn 1회, lookup 무로그
+- `RuntimeMethodBridge.enterDeclaredInterfaceMethod(Method)`: `int` 반환(miss/no-op/fail=0), **TraceContext null이면 no-op**, miss 무로그, Throwable 방어(VMError/ThreadDeath만 rethrow)
+- lifecycle: bootstrap 성공 시 `declaredMethods` replace, clear는 두 map 다, `declaredMethodCount` 배선
+- ⚠️ 리뷰 캐치: 필드 rename(`registry`→`repositoryMethods`)로 파라미터와 shadow 충돌 → `repositoryMethods = next`가 컴파일 안 됨 → `this.repositoryMethods = next`로 수정
+- 상태: **dormant** — 어떤 transformer도 아직 `enterDeclaredInterfaceMethod` 미호출 → 부트/JPA 동작 구조적으로 불변. build/major52 확인
+
+### 단위 2 완료(코드) — MyBatis MapperProxy 훅
+- 신규: `instrument/MyBatisMapperProxyTransformer`, `MyBatisMapperProxyClassVisitor`, `MyBatisMapperProxyInvokeAdapter`
+- 수정: `AgentPremain` (87번 `new MyBatisMapperProxyTransformer()` 무조건 등록)
+- 훅 대상: `org/apache/ibatis/binding/MapperProxy.invoke(Object,Method,Object[])`
+- 불변식: SpringAOP 훅=`enterInterfaceMethod`(repository만) / MyBatis 훅=`enterDeclaredInterfaceMethod`(declared만) — **경계 절대 공유 금지**(이중 trace 방지). loader null skip, `SafeClassWriter(reader,loader)`, `loadArg(1)`=Method / `loadArg(2)`=args, methodId try 전 0 선초기화, `methodId>0`만 exit
+- descriptor는 `InvocationHandler.invoke` 계약 고정 → **MyBatis 버전 분기 넣지 말 것**
+- 검증: shadowJar 성공, 신규 3클래스 major 52 ✅
+- 상태: **코드 완료. legacy 외장 Tomcat 실기동 E2E 미실행 → Step 3 전체 완료 아님**
+
+### 남은 것 = legacy E2E (kjspringweb-legacy/CLAUDE.md 4장 참조)
+셋업(엔진 legacy config 기동 + legacy `turtlepick.properties` + Tomcat `-javaagent` 배선) 후 **3단 게이트**:
+1. Controller node (외장 Tomcat javax FilterChain hook + HTTP context — **최대 미지수**)
+2. Controller→Service
+3. Controller→Service→Mapper
+1칸 실패 시 Mapper 보지 말 것 (`enterDeclaredInterfaceMethod`는 context null이면 no-op).
+
+### 부채 (hardening 때 정리)
+- `SafeClassWriter` **4중 복사** (SpringWeb/ApplicationMethod/SpringAopProxy/MyBatis)
+- proxy invoke adapter **near-dup 2개** (SpringAop/MyBatis — enter 호출 한 줄 빼고 동일)
+- 난독화 keep 경계: 진입점 `AgentPremain.premain` + bridge 6메서드(`RuntimeMethodBridge.enter/exit/enterInterfaceMethod/enterDeclaredInterfaceMethod`, `HttpRequestContextBridge.safeExit`, `AgentHttpBridge.safeEnterOrHandle/safeIntercept`). self-reflection 0. MyBatis 훅은 `enterDeclaredInterfaceMethod` 재사용이라 keep 안 늘어남
+- turtlepick-agent-core 신규 파일들 git **untracked** — 커밋 시 `git add` 필요
+
+---
+
 ## 13-1. 다음 과제 (2026-06-25 기준)
 
 ### 서버 agent — 섹터 9 완료. 다음은 엔진 선행 후 진행
