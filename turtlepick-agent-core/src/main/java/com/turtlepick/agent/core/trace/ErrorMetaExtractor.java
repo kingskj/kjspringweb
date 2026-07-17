@@ -8,6 +8,7 @@ import java.util.Set;
 public final class ErrorMetaExtractor {
 
     private static final int MAX_MESSAGE_LENGTH = 500;
+    private static final int MAX_STACK_FRAMES = 30;
     private static final int MAX_CAUSE_DEPTH = 32;
 
     private ErrorMetaExtractor() {
@@ -15,7 +16,7 @@ public final class ErrorMetaExtractor {
 
     public static ErrorMeta extract(Throwable throwable, String[] userFramePackages, int maxFrames) {
         if (throwable == null) {
-            return new ErrorMeta(null, null, null, null, null);
+            return new ErrorMeta(null, null, null, null, null, null);
         }
 
         List<Throwable> chain = causeChain(throwable);
@@ -26,8 +27,25 @@ public final class ErrorMetaExtractor {
                 truncate(safeMessage(throwable)),
                 safeClassName(root),
                 truncate(safeMessage(root)),
+                extractStackFrames(throwable, MAX_STACK_FRAMES),
                 extractUserFrames(chain, userFramePackages, maxFrames)
         );
+    }
+
+    private static List<StackFrame> extractStackFrames(Throwable throwable, int maxFrames) {
+        List<StackFrame> frames = new ArrayList<StackFrame>();
+        if (throwable == null || maxFrames <= 0) {
+            return frames;
+        }
+
+        StackTraceElement[] stackTrace = safeStackTrace(throwable);
+        for (int i = 0; i < stackTrace.length && frames.size() < maxFrames; i++) {
+            StackTraceElement element = stackTrace[i];
+            if (element != null) {
+                frames.add(toStackFrame(element));
+            }
+        }
+        return frames;
     }
 
     private static List<Throwable> causeChain(Throwable throwable) {
@@ -61,9 +79,15 @@ public final class ErrorMetaExtractor {
                     continue;
                 }
 
-                String key = className + "#" + element.getMethodName() + ":" + element.getLineNumber();
+                String key = className + "#" + element.getMethodName() + ":" + element.getFileName()
+                        + ":" + element.getLineNumber();
                 if (seen.add(key)) {
-                    frames.add(new UserFrame(className, element.getMethodName(), element.getLineNumber()));
+                    frames.add(new UserFrame(
+                            className,
+                            element.getMethodName(),
+                            element.getFileName(),
+                            element.getLineNumber()
+                    ));
                 }
             }
         }
@@ -119,6 +143,15 @@ public final class ErrorMetaExtractor {
         } catch (Throwable ignored) {
             return new StackTraceElement[0];
         }
+    }
+
+    private static StackFrame toStackFrame(StackTraceElement element) {
+        return new StackFrame(
+                element.getClassName(),
+                element.getMethodName(),
+                element.getFileName(),
+                element.getLineNumber()
+        );
     }
 
     private static String safeClassName(Throwable throwable) {

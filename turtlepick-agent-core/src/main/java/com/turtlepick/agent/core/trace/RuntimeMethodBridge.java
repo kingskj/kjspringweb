@@ -163,7 +163,7 @@ public final class RuntimeMethodBridge {
             } else {
                 ErrorMeta meta = ErrorMetaExtractor.extract(throwable, userFramePackages, MAX_USER_FRAMES);
                 String[] errorArgs = ErrorArgExtractor.extract(args, errorArgOptions);
-                context.markError(top.getCallId(), meta, errorArgs);
+                context.markError(top.getCallId(), top.getFqcnMethod(), meta, errorArgs);
             }
         }
 

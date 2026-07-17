@@ -23,6 +23,8 @@ public final class TraceLogWriter {
     private static String loggingDir;
     private static int rollingIntervalMinutes;
     private static String commitHash;
+    private static String serverId;
+    private static String appName;
     private static boolean verboseFieldNames;
     private static long currentSlot = Long.MIN_VALUE;
     private static PrintWriter writer;
@@ -36,6 +38,8 @@ public final class TraceLogWriter {
             String loggingDirValue,
             int rollingIntervalMinutesValue,
             String commitHashValue,
+            String serverIdValue,
+            String appNameValue,
             boolean verboseFieldNamesValue,
             LogReadyNotifier notifier
     ) {
@@ -47,6 +51,8 @@ public final class TraceLogWriter {
             loggingDir = trimToNull(loggingDirValue);
             rollingIntervalMinutes = rollingIntervalMinutesValue;
             commitHash = trimToNull(commitHashValue);
+            serverId = trimToNull(serverIdValue);
+            appName = trimToNull(appNameValue);
             verboseFieldNames = verboseFieldNamesValue;
             logReadyNotifier = notifier;
             currentSlot = Long.MIN_VALUE;
@@ -64,6 +70,12 @@ public final class TraceLogWriter {
                 AgentLog.warn("trace log writer disabled cause=COMMIT_HASH_BLANK");
                 loggingDir = null;
                 return;
+            }
+            if (serverId == null) {
+                AgentLog.warn("trace log header serverId omitted cause=SERVER_ID_BLANK");
+            }
+            if (appName == null) {
+                AgentLog.warn("trace log header appName omitted cause=APP_NAME_BLANK");
             }
         }
     }
@@ -121,7 +133,7 @@ public final class TraceLogWriter {
         currentFileName = nextFileName;
         currentSlot = nextSlot;
         if (writeHeader) {
-            writer.println(TraceLogSerializer.serializeHeader(commitHash, now, verboseFieldNames));
+            writer.println(TraceLogSerializer.serializeHeader(commitHash, now, verboseFieldNames, serverId, appName));
             writer.flush();
         }
     }

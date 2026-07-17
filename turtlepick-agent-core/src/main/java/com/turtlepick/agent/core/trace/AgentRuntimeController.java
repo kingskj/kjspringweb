@@ -143,6 +143,8 @@ public final class AgentRuntimeController {
                 config.getLoggingDir(),
                 config.getRollingIntervalMinutes(),
                 normalizedCommitHash,
+                config.getAgentServerId(),
+                config.getAgentAppName(),
                 config.isVerboseFieldNames(),
                 nextNotifier);
         logReadyNotifier = nextNotifier;
