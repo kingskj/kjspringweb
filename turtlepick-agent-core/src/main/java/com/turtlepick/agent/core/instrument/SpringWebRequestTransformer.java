@@ -1,5 +1,6 @@
 package com.turtlepick.agent.core.instrument;
 
+import com.turtlepick.agent.core.util.AgentLog;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
@@ -23,11 +24,39 @@ public final class SpringWebRequestTransformer implements ClassFileTransformer {
             return null;
         }
 
+        try {
+            if (TransformedClassDumper.isEnabled()) {
+                TransformedClassDumper.dump("pre-reorder", className,
+                        transformClass(loader, className, classfileBuffer, false));
+            }
+            byte[] transformed = transformClass(loader, className, classfileBuffer, true);
+            TransformedClassDumper.dump("post-reorder", className, transformed);
+            return transformed;
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("spring web transform skipped className=" + className
+                    + " cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+            return null;
+        }
+    }
+
+    private byte[] transformClass(
+            ClassLoader loader,
+            String className,
+            byte[] classfileBuffer,
+            boolean reorderAgentCatchAll) {
+
         ClassReader reader = new ClassReader(classfileBuffer);
         ClassWriter writer = new SafeClassWriter(reader, loader);
-        ClassVisitor visitor = new DispatcherServletClassVisitor(writer);
+        ClassVisitor visitor = new DispatcherServletClassVisitor(writer, reorderAgentCatchAll);
         reader.accept(visitor, ClassReader.EXPAND_FRAMES);
         return writer.toByteArray();
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        return throwable.getMessage() == null ? "" : throwable.getMessage();
     }
 
     private static final class SafeClassWriter extends ClassWriter {

@@ -44,11 +44,13 @@ public final class ApplicationMethodTransformer implements ClassFileTransformer 
         }
 
         try {
-            ClassReader reader = new ClassReader(classfileBuffer);
-            ClassWriter writer = new SafeClassWriter(reader, loader);
-            ClassVisitor visitor = new ApplicationClassVisitor(writer, index, fqcn);
-            reader.accept(visitor, ClassReader.EXPAND_FRAMES);
-            return writer.toByteArray();
+            if (TransformedClassDumper.isEnabled()) {
+                TransformedClassDumper.dump("pre-reorder", className,
+                        transformClass(loader, classfileBuffer, index, fqcn, false));
+            }
+            byte[] transformed = transformClass(loader, classfileBuffer, index, fqcn, true);
+            TransformedClassDumper.dump("post-reorder", className, transformed);
+            return transformed;
         } catch (Throwable t) {
             if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
                 throw (Error) t;
@@ -57,6 +59,20 @@ public final class ApplicationMethodTransformer implements ClassFileTransformer 
                     + " cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
             return null;
         }
+    }
+
+    private byte[] transformClass(
+            ClassLoader loader,
+            byte[] classfileBuffer,
+            MethodProbeIndex index,
+            String fqcn,
+            boolean reorderAgentCatchAll) {
+
+        ClassReader reader = new ClassReader(classfileBuffer);
+        ClassWriter writer = new SafeClassWriter(reader, loader);
+        ClassVisitor visitor = new ApplicationClassVisitor(writer, index, fqcn, reorderAgentCatchAll);
+        reader.accept(visitor, ClassReader.EXPAND_FRAMES);
+        return writer.toByteArray();
     }
 
     private static String safeMessage(Throwable throwable) {

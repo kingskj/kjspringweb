@@ -81,6 +81,9 @@ public final class TraceLogSerializer {
             appendStringField(builder, "erk", "exception");
         }
         appendCompactError(builder, context);
+        if (shouldWriteHttpStatus(context)) {
+            appendNumberField(builder, "hs", context.getHttpStatus());
+        }
         appendCompactNodes(builder, nodes, context.getOccurredAtMs());
         builder.append('}');
         return builder.toString();
@@ -98,6 +101,9 @@ public final class TraceLogSerializer {
             appendStringField(builder, "errorKind", "exception");
         }
         appendVerboseError(builder, context);
+        if (shouldWriteHttpStatus(context)) {
+            appendNumberField(builder, "httpStatus", context.getHttpStatus());
+        }
         appendVerboseNodes(builder, nodes, context.getOccurredAtMs());
         builder.append('}');
         return builder.toString();
@@ -278,6 +284,7 @@ public final class TraceLogSerializer {
             appendJsonString(builder, formatNodeTime(occurredAtMs, node.getStartOffsetMs()));
             builder.append(",\"et\":");
             appendJsonString(builder, formatNodeTime(occurredAtMs, node.getEndOffsetMs()));
+            appendCompactParams(builder, node.getParams());
             builder.append('}');
         }
         builder.append(']');
@@ -300,9 +307,107 @@ public final class TraceLogSerializer {
             appendJsonString(builder, formatNodeTime(occurredAtMs, node.getStartOffsetMs()));
             builder.append(",\"endedAt\":");
             appendJsonString(builder, formatNodeTime(occurredAtMs, node.getEndOffsetMs()));
+            appendVerboseParams(builder, node.getParams());
             builder.append('}');
         }
         builder.append(']');
+    }
+
+    private static boolean shouldWriteHttpStatus(RuntimeTraceContext context) {
+        return context.getHttpStatus() != null
+                && (context.hasError() || context.shouldEmitHttpStatus());
+    }
+
+    private static void appendCompactParams(StringBuilder builder, List<TraceParam> params) {
+        if (params == null || params.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "pa");
+        builder.append('[');
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            TraceParam param = params.get(i);
+            StringBuilder paramBuilder = new StringBuilder(96);
+            paramBuilder.append('{');
+            appendStringField(paramBuilder, "pn", param.getName());
+            appendStringField(paramBuilder, "pt", param.getType());
+            appendStringField(paramBuilder, "pv", param.getValue());
+            appendCompactParamFields(paramBuilder, param.getFields());
+            paramBuilder.append('}');
+            builder.append(paramBuilder);
+        }
+        builder.append(']');
+    }
+
+    private static void appendCompactParamFields(StringBuilder builder, List<TraceParamField> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "pf");
+        builder.append('{');
+        for (int i = 0; i < fields.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            TraceParamField field = fields.get(i);
+            appendJsonString(builder, field.getName());
+            builder.append(':');
+            StringBuilder fieldBuilder = new StringBuilder(64);
+            fieldBuilder.append('{');
+            appendStringField(fieldBuilder, "pt", field.getType());
+            appendStringField(fieldBuilder, "pv", field.getValue());
+            fieldBuilder.append('}');
+            builder.append(fieldBuilder);
+        }
+        builder.append('}');
+    }
+
+    private static void appendVerboseParams(StringBuilder builder, List<TraceParam> params) {
+        if (params == null || params.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "params");
+        builder.append('[');
+        for (int i = 0; i < params.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            TraceParam param = params.get(i);
+            StringBuilder paramBuilder = new StringBuilder(128);
+            paramBuilder.append('{');
+            appendStringField(paramBuilder, "name", param.getName());
+            appendStringField(paramBuilder, "type", param.getType());
+            appendStringField(paramBuilder, "value", param.getValue());
+            appendVerboseParamFields(paramBuilder, param.getFields());
+            paramBuilder.append('}');
+            builder.append(paramBuilder);
+        }
+        builder.append(']');
+    }
+
+    private static void appendVerboseParamFields(StringBuilder builder, List<TraceParamField> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "fields");
+        builder.append('{');
+        for (int i = 0; i < fields.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            TraceParamField field = fields.get(i);
+            appendJsonString(builder, field.getName());
+            builder.append(':');
+            StringBuilder fieldBuilder = new StringBuilder(80);
+            fieldBuilder.append('{');
+            appendStringField(fieldBuilder, "type", field.getType());
+            appendStringField(fieldBuilder, "value", field.getValue());
+            fieldBuilder.append('}');
+            builder.append(fieldBuilder);
+        }
+        builder.append('}');
     }
 
     private static String formatNodeTime(long occurredAtMs, long offsetMs) {

@@ -1,5 +1,9 @@
 package com.turtlepick.agent.core.trace;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 public final class CompletedNode {
 
     private final int callId;
@@ -8,6 +12,8 @@ public final class CompletedNode {
     private final String fqcnMethod;
     private final long startOffsetMs;
     private final long endOffsetMs;
+    private final Object[] args;
+    private List<TraceParam> params = Collections.emptyList();
 
     public CompletedNode(
             int callId,
@@ -15,7 +21,8 @@ public final class CompletedNode {
             int methodId,
             String fqcnMethod,
             long startOffsetMs,
-            long endOffsetMs
+            long endOffsetMs,
+            Object[] args
     ) {
         this.callId = callId;
         this.parentCallId = parentCallId;
@@ -23,6 +30,7 @@ public final class CompletedNode {
         this.fqcnMethod = fqcnMethod;
         this.startOffsetMs = startOffsetMs;
         this.endOffsetMs = endOffsetMs;
+        this.args = args;
     }
 
     public int getCallId() {
@@ -48,4 +56,19 @@ public final class CompletedNode {
     public long getEndOffsetMs() {
         return endOffsetMs;
     }
+
+    public Object[] getArgs() {
+        return args;
+    }
+
+    public void attachParams(List<TraceParam> value) {
+        this.params = value == null || value.isEmpty()
+                ? Collections.<TraceParam>emptyList()
+                : Collections.unmodifiableList(new ArrayList<TraceParam>(value));
+    }
+
+    public List<TraceParam> getParams() {
+        return params;
+    }
+
 }

@@ -9,19 +9,28 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 
 public final class TurtlepickConfigLoader {
 
     private static final String CONFIG_SYSTEM_PROPERTY = "turtlepick.config";
     private static final String CONFIG_FILE_NAME = "turtlepick.properties";
+    private static final String BUSINESS_ERROR_STATUS_KEY =
+            "turtlepick.agent.business-error.exclude-http-statuses";
+    private static final String BUSINESS_ERROR_RULE_PREFIX =
+            "turtlepick.agent.business-error.rules.";
 
     public AgentConfig load(File agentJarFile) {
         File configFile = resolveConfigFile(agentJarFile);
         Properties properties = loadProperties(configFile);
         AgentConfig config = bind(properties);
         validate(config);
+        logBusinessErrorSummary(config.getBusinessErrorConfig());
         AgentLog.info("config loaded path=" + configFile.getAbsolutePath());
         return config;
     }
@@ -86,11 +95,101 @@ public final class TurtlepickConfigLoader {
                         "turtlepick.agent.error.args.exclude-classes",
                         AgentConfig.defaultErrorArgsExcludeClasses()
                 ))
+                .businessErrorConfig(parseBusinessErrorConfig(properties))
                 .instrumentationHttp(getBoolean(properties, "turtlepick.agent.instrumentation.http", true))
                 .instrumentationService(getBoolean(properties, "turtlepick.agent.instrumentation.service", true))
                 .instrumentationSqlDatasourceProxy(getBoolean(properties, "turtlepick.agent.instrumentation.sql.datasource-proxy", true))
                 .instrumentationSqlMybatisInterceptor(getBoolean(properties, "turtlepick.agent.instrumentation.sql.mybatis-interceptor", false))
                 .build();
+    }
+
+    private BusinessErrorConfig parseBusinessErrorConfig(Properties properties) {
+        Set<Integer> statuses = parseExcludeHttpStatuses(properties.getProperty(BUSINESS_ERROR_STATUS_KEY));
+        Map<String, RuleDraft> drafts = new LinkedHashMap<String, RuleDraft>();
+
+        for (Object keyObject : properties.keySet()) {
+            String key = String.valueOf(keyObject);
+            if (!key.startsWith(BUSINESS_ERROR_RULE_PREFIX)) {
+                continue;
+            }
+            String suffix = key.substring(BUSINESS_ERROR_RULE_PREFIX.length());
+            int dot = suffix.lastIndexOf('.');
+            if (dot <= 0 || dot == suffix.length() - 1) {
+                AgentLog.warn("business-error rule ignored key=" + key + " cause=INVALID_RULE_KEY");
+                continue;
+            }
+
+            String ruleId = trimToNull(suffix.substring(0, dot));
+            String field = trimToNull(suffix.substring(dot + 1));
+            if (ruleId == null || field == null) {
+                AgentLog.warn("business-error rule ignored key=" + key + " cause=INVALID_RULE_KEY");
+                continue;
+            }
+            if (!isBusinessRuleField(field)) {
+                AgentLog.warn("business-error rule field ignored"
+                        + " ruleId=" + ruleId
+                        + " field=" + field
+                        + " cause=UNKNOWN_FIELD");
+                continue;
+            }
+
+            RuleDraft draft = drafts.get(ruleId);
+            if (draft == null) {
+                draft = new RuleDraft(ruleId);
+                drafts.put(ruleId, draft);
+            }
+            draft.put(field, properties.getProperty(key));
+        }
+
+        List<BusinessErrorRule> rules = new ArrayList<BusinessErrorRule>();
+        for (RuleDraft draft : drafts.values()) {
+            BusinessErrorRule rule = draft.toRule();
+            if (rule.isValid()) {
+                rules.add(rule);
+            } else {
+                AgentLog.warn("business-error rule ignored"
+                        + " ruleId=" + draft.ruleId
+                        + " cause=INCOMPLETE_RULE");
+            }
+        }
+        return new BusinessErrorConfig(statuses, rules);
+    }
+
+    private Set<Integer> parseExcludeHttpStatuses(String value) {
+        LinkedHashSet<Integer> statuses = new LinkedHashSet<Integer>();
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return statuses;
+        }
+
+        String[] parts = normalized.split(",");
+        for (int i = 0; i < parts.length; i++) {
+            String part = trimToNull(parts[i]);
+            if (part == null) {
+                continue;
+            }
+            try {
+                int status = Integer.parseInt(part);
+                if (status >= 500 && status <= 599) {
+                    AgentLog.warn("business-error http status ignored status=" + status + " cause=FIVE_XX_GUARD");
+                    continue;
+                }
+                if (status < 100 || status > 599) {
+                    AgentLog.warn("business-error http status ignored status=" + status + " cause=INVALID_STATUS");
+                    continue;
+                }
+                statuses.add(Integer.valueOf(status));
+            } catch (NumberFormatException e) {
+                AgentLog.warn("business-error http status ignored value=" + part + " cause=INVALID_INT");
+            }
+        }
+        return statuses;
+    }
+
+    private boolean isBusinessRuleField(String field) {
+        return "exception-class".equals(field)
+                || "code-accessor".equals(field)
+                || "exclude-codes".equals(field);
     }
 
     void validate(AgentConfig config) {
@@ -161,6 +260,30 @@ public final class TurtlepickConfigLoader {
         return values.toArray(new String[values.size()]);
     }
 
+    private Set<String> getStringSet(String value) {
+        LinkedHashSet<String> values = new LinkedHashSet<String>();
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return values;
+        }
+        String[] parts = normalized.split(",");
+        for (int i = 0; i < parts.length; i++) {
+            String item = trimToNull(parts[i]);
+            if (item != null) {
+                values.add(item);
+            }
+        }
+        return values;
+    }
+
+    private void logBusinessErrorSummary(BusinessErrorConfig config) {
+        BusinessErrorConfig value = config == null ? BusinessErrorConfig.disabled() : config;
+        AgentLog.info("business-error rules loaded"
+                + " statuses=" + value.getExcludeHttpStatuses()
+                + " rules=" + value.getRules().size()
+                + " ruleIds=" + value.describeRuleIds());
+    }
+
     private String normalizeClassPattern(String value) {
         if ("byte[]".equals(value)) {
             return "[B";
@@ -190,6 +313,32 @@ public final class TurtlepickConfigLoader {
 
     private boolean isEmpty(String value) {
         return value == null || value.trim().length() == 0;
+    }
+
+    private final class RuleDraft {
+
+        private final String ruleId;
+        private String exceptionClassName;
+        private String codeAccessor;
+        private Set<String> excludeCodes = new LinkedHashSet<String>();
+
+        private RuleDraft(String ruleId) {
+            this.ruleId = ruleId;
+        }
+
+        private void put(String field, String value) {
+            if ("exception-class".equals(field)) {
+                exceptionClassName = trimToNull(value);
+            } else if ("code-accessor".equals(field)) {
+                codeAccessor = trimToNull(value);
+            } else if ("exclude-codes".equals(field)) {
+                excludeCodes = getStringSet(value);
+            }
+        }
+
+        private BusinessErrorRule toRule() {
+            return new BusinessErrorRule(ruleId, exceptionClassName, codeAccessor, excludeCodes);
+        }
     }
 
     private void closeQuietly(Closeable closeable) {

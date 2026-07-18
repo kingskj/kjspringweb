@@ -47,12 +47,47 @@ public final class SpringAopProxyInvokeTransformer implements ClassFileTransform
             return null;
         }
 
+        try {
+            if (TransformedClassDumper.isEnabled()) {
+                TransformedClassDumper.dump("pre-reorder", className,
+                        transformClass(loader, className, classfileBuffer, targetMethod, targetDescriptor, false));
+            }
+            byte[] transformed = transformClass(loader, className, classfileBuffer, targetMethod, targetDescriptor, true);
+            TransformedClassDumper.dump("post-reorder", className, transformed);
+            AgentLog.info("aop proxy hook installed target=" + className);
+            return transformed;
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("aop proxy transform skipped className=" + className
+                    + " cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+            return null;
+        }
+    }
+
+    private byte[] transformClass(
+            ClassLoader loader,
+            String className,
+            byte[] classfileBuffer,
+            String targetMethod,
+            String targetDescriptor,
+            boolean reorderAgentCatchAll) {
+
         ClassReader reader = new ClassReader(classfileBuffer);
         ClassWriter writer = new SafeClassWriter(reader, loader);
-        ClassVisitor visitor = new SpringAopProxyClassVisitor(writer, targetMethod, targetDescriptor);
+        ClassVisitor visitor = new SpringAopProxyClassVisitor(
+                writer,
+                className,
+                targetMethod,
+                targetDescriptor,
+                reorderAgentCatchAll);
         reader.accept(visitor, ClassReader.EXPAND_FRAMES);
-        AgentLog.info("aop proxy hook installed target=" + className);
         return writer.toByteArray();
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        return throwable.getMessage() == null ? "" : throwable.getMessage();
     }
 
     private static final class SafeClassWriter extends ClassWriter {

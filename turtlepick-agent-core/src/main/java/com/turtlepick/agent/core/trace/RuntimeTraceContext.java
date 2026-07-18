@@ -1,5 +1,6 @@
 package com.turtlepick.agent.core.trace;
 
+import com.turtlepick.agent.core.config.BusinessErrorConfig;
 import com.turtlepick.agent.core.instrument.MethodSignatureParser;
 import com.turtlepick.agent.core.instrument.ParsedMethodSignature;
 import com.turtlepick.agent.core.state.ResolvedEndpoint;
@@ -34,6 +35,9 @@ public final class RuntimeTraceContext {
     private String requestMethod;
     private String requestUri;
     private String endpointResolutionStatus;
+    private boolean httpTrace;
+    private boolean pendingHttpFlush;
+    private Integer httpStatus;
     private boolean hasError;
     private Integer errorCallId;
     private String exceptionClass;
@@ -44,6 +48,8 @@ public final class RuntimeTraceContext {
     private List<UserFrame> userFrames = new ArrayList<UserFrame>();
     private String[] errorArgs;
     private boolean errorNodeMismatch;
+    private BusinessErrorCandidate businessCandidate;
+    private boolean emitHttpStatus;
 
     public RuntimeTraceContext() {
         this.traceId = UUID.randomUUID().toString();
@@ -93,6 +99,22 @@ public final class RuntimeTraceContext {
         return endpointResolutionStatus;
     }
 
+    public boolean isHttpTrace() {
+        return httpTrace;
+    }
+
+    public boolean isPendingHttpFlush() {
+        return pendingHttpFlush;
+    }
+
+    public Integer getHttpStatus() {
+        return httpStatus;
+    }
+
+    public boolean shouldEmitHttpStatus() {
+        return emitHttpStatus;
+    }
+
     public boolean hasError() {
         return hasError;
     }
@@ -134,6 +156,10 @@ public final class RuntimeTraceContext {
     }
 
     public void push(int methodId, String fqcnMethod) {
+        push(methodId, fqcnMethod, null);
+    }
+
+    public void push(int methodId, String fqcnMethod, Object[] args) {
         long now = System.nanoTime();
         int parentCallId;
         if (stack.isEmpty()) {
@@ -148,7 +174,7 @@ public final class RuntimeTraceContext {
         }
 
         int callId = ++nextCallId;
-        stack.push(new MethodFrame(callId, parentCallId, methodId, fqcnMethod, now));
+        stack.push(new MethodFrame(callId, parentCallId, methodId, fqcnMethod, now, args));
     }
 
     public void addCompletedNode(MethodFrame frame, long exitNanoTime) {
@@ -160,19 +186,33 @@ public final class RuntimeTraceContext {
                 frame.getMethodId(),
                 frame.getFqcnMethod(),
                 startOffsetMs,
-                endOffsetMs
+                endOffsetMs,
+                frame.getArgs()
         ));
     }
 
     public void markError() {
         hasError = true;
+        businessCandidate = null;
     }
 
     public void markError(int callId, String eniFqcnMethod, ErrorMeta meta, String[] args) {
         hasError = true;
+        businessCandidate = null;
         if (errorCallId != null) {
             return;
         }
+        applyError(callId, eniFqcnMethod, meta, args);
+    }
+
+    public void markBusinessCandidate(int callId, String eniFqcnMethod, ErrorMeta meta) {
+        if (hasError || businessCandidate != null) {
+            return;
+        }
+        businessCandidate = new BusinessErrorCandidate(callId, eniFqcnMethod, meta);
+    }
+
+    private void applyError(int callId, String eniFqcnMethod, ErrorMeta meta, String[] args) {
         errorCallId = Integer.valueOf(callId);
         if (meta != null) {
             this.exceptionClass = meta.getExceptionClass();
@@ -258,11 +298,99 @@ public final class RuntimeTraceContext {
         }
 
         if (httpRequestContext != null) {
+            this.httpTrace = true;
             this.requestMethod = httpRequestContext.getMethod();
             this.requestUri = httpRequestContext.getRequestUri();
         } else {
+            this.httpTrace = false;
             this.requestMethod = null;
             this.requestUri = null;
+        }
+    }
+
+    public void markPendingHttpFlush() {
+        pendingHttpFlush = true;
+    }
+
+    public void attachHttpStatus(Integer status) {
+        this.httpStatus = status;
+    }
+
+    public void finalizeBusinessErrorDecision(BusinessErrorConfig config) {
+        BusinessErrorConfig effectiveConfig = config == null ? BusinessErrorConfig.disabled() : config;
+        boolean hasCandidate = businessCandidate != null;
+
+        if (httpTrace) {
+            if (httpStatus == null) {
+                if (!hasError && hasCandidate) {
+                    promoteBusinessCandidate();
+                }
+                businessCandidate = null;
+                return;
+            }
+            if (httpStatus.intValue() >= 500) {
+                if (!hasError && hasCandidate) {
+                    promoteBusinessCandidate();
+                }
+                businessCandidate = null;
+                return;
+            }
+            if (effectiveConfig.isHttpStatusExcluded(httpStatus)) {
+                clearErrorState();
+                businessCandidate = null;
+                emitHttpStatus = true;
+                return;
+            }
+            if (hasError) {
+                businessCandidate = null;
+                return;
+            }
+            if (hasCandidate) {
+                businessCandidate = null;
+                emitHttpStatus = true;
+            }
+            return;
+        }
+
+        if (!hasError && hasCandidate) {
+            businessCandidate = null;
+            return;
+        }
+        businessCandidate = null;
+    }
+
+    private void promoteBusinessCandidate() {
+        BusinessErrorCandidate candidate = businessCandidate;
+        if (candidate == null) {
+            return;
+        }
+        hasError = true;
+        if (errorCallId == null) {
+            applyError(candidate.getCallId(), candidate.getFqcnMethod(), candidate.getErrorMeta(), null);
+        }
+        businessCandidate = null;
+    }
+
+    private void clearErrorState() {
+        hasError = false;
+        errorCallId = null;
+        exceptionClass = null;
+        exceptionMessage = null;
+        rootExceptionClass = null;
+        rootExceptionMessage = null;
+        stackFrames.clear();
+        userFrames.clear();
+        errorArgs = null;
+        errorNodeMismatch = false;
+    }
+
+    public void materializeParams(ErrorArgCaptureOptions options) {
+        if (!hasError || nodes.isEmpty()) {
+            return;
+        }
+        for (int i = 0; i < nodes.size(); i++) {
+            CompletedNode node = nodes.get(i);
+            node.attachParams(TraceParamExtractor.extract(node.getFqcnMethod(), node.getArgs(), options));
         }
     }
 
@@ -293,6 +421,9 @@ public final class RuntimeTraceContext {
         requestMethod = null;
         requestUri = null;
         endpointResolutionStatus = null;
+        httpTrace = false;
+        pendingHttpFlush = false;
+        httpStatus = null;
         hasError = false;
         errorCallId = null;
         exceptionClass = null;
@@ -303,6 +434,8 @@ public final class RuntimeTraceContext {
         userFrames.clear();
         errorArgs = null;
         errorNodeMismatch = false;
+        businessCandidate = null;
+        emitHttpStatus = false;
     }
 
     private static String[] copyOf(String[] value) {

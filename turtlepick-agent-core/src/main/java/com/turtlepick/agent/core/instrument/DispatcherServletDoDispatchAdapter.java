@@ -12,7 +12,8 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
 
     private static final String BRIDGE_OWNER = Type.getInternalName(HttpRequestContextBridge.class);
     private static final String SAFE_EXIT_DESC =
-            Type.getMethodDescriptor(Type.VOID_TYPE);
+            Type.getMethodDescriptor(Type.VOID_TYPE,
+                    Type.getType(Object.class), Type.BOOLEAN_TYPE);
     private static final String HTTP_BRIDGE_OWNER = Type.getInternalName(AgentHttpBridge.class);
     private static final String SAFE_ENTER_OR_HANDLE_DESC =
             Type.getMethodDescriptor(Type.BOOLEAN_TYPE,
@@ -20,14 +21,24 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
 
     private final Label startLabel = new Label();
     private final Label endLabel = new Label();
-    private final Label handlerLabel = new Label();
+    private final Label handlerLabel;
 
     protected DispatcherServletDoDispatchAdapter(
             MethodVisitor methodVisitor,
             int access,
             String name,
             String descriptor) {
+        this(methodVisitor, access, name, descriptor, new Label());
+    }
+
+    protected DispatcherServletDoDispatchAdapter(
+            MethodVisitor methodVisitor,
+            int access,
+            String name,
+            String descriptor,
+            Label handlerLabel) {
         super(Opcodes.ASM9, methodVisitor, access, name, descriptor);
+        this.handlerLabel = handlerLabel == null ? new Label() : handlerLabel;
     }
 
     @Override
@@ -49,6 +60,8 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
     @Override
     protected void onMethodExit(int opcode) {
         if (opcode != ATHROW) {
+            loadArg(1);
+            push(false);
             visitMethodInsn(INVOKESTATIC, BRIDGE_OWNER, "safeExit", SAFE_EXIT_DESC, false);
         }
     }
@@ -57,6 +70,8 @@ public final class DispatcherServletDoDispatchAdapter extends AdviceAdapter {
     public void visitMaxs(int maxStack, int maxLocals) {
         visitLabel(endLabel);
         visitLabel(handlerLabel);
+        loadArg(1);
+        push(true);
         visitMethodInsn(INVOKESTATIC, BRIDGE_OWNER, "safeExit", SAFE_EXIT_DESC, false);
         throwException();
         super.visitMaxs(maxStack, maxLocals);

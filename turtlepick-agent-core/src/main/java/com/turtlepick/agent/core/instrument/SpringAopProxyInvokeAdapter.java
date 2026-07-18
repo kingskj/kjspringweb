@@ -18,7 +18,8 @@ final class SpringAopProxyInvokeAdapter extends AdviceAdapter {
             Type.getMethodDescriptor(
                     Type.INT_TYPE,
                     Type.getType(Object.class),
-                    Type.getType(Method.class)
+                    Type.getType(Method.class),
+                    Type.getType(Object[].class)
             );
 
     private static final String EXIT_DESC =
@@ -38,7 +39,7 @@ final class SpringAopProxyInvokeAdapter extends AdviceAdapter {
 
     private final Label startLabel = new Label();
     private final Label endLabel = new Label();
-    private final Label handlerLabel = new Label();
+    private final Label handlerLabel;
 
     private int methodIdLocal = -1;
 
@@ -47,7 +48,17 @@ final class SpringAopProxyInvokeAdapter extends AdviceAdapter {
             int access,
             String name,
             String descriptor) {
+        this(methodVisitor, access, name, descriptor, new Label());
+    }
+
+    SpringAopProxyInvokeAdapter(
+            MethodVisitor methodVisitor,
+            int access,
+            String name,
+            String descriptor,
+            Label handlerLabel) {
         super(Opcodes.ASM9, methodVisitor, access, name, descriptor);
+        this.handlerLabel = handlerLabel == null ? new Label() : handlerLabel;
     }
 
     @Override
@@ -64,6 +75,7 @@ final class SpringAopProxyInvokeAdapter extends AdviceAdapter {
 
         loadArg(0);
         loadArg(1);
+        loadArg(2);
         visitMethodInsn(INVOKESTATIC, BRIDGE_OWNER, "enterInterfaceMethod",
                 ENTER_INTERFACE_DESC, false);
         storeLocal(methodIdLocal);

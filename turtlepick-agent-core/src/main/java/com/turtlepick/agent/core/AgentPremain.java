@@ -75,6 +75,7 @@ public final class AgentPremain {
                     config.getErrorArgsMaxLength(),
                     config.getErrorArgsExcludeClasses()
             ));
+            RuntimeMethodBridge.installBusinessErrorConfig(config.getBusinessErrorConfig());
 
             ApplicationMethodTransformer applicationTransformer =
                     new ApplicationMethodTransformer(MethodProbeIndex.empty());

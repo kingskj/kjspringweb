@@ -16,7 +16,8 @@ public final class MethodProbeAdviceAdapter extends AdviceAdapter {
             Type.getMethodDescriptor(
                     Type.VOID_TYPE,
                     Type.INT_TYPE,
-                    Type.getType(String.class)
+                    Type.getType(String.class),
+                    Type.getType(Object[].class)
             );
 
     private static final String EXIT_DESC =
@@ -38,7 +39,7 @@ public final class MethodProbeAdviceAdapter extends AdviceAdapter {
     private final String fqcnMethod;
     private final Label startLabel = new Label();
     private final Label endLabel = new Label();
-    private final Label handlerLabel = new Label();
+    private final Label handlerLabel;
 
     protected MethodProbeAdviceAdapter(
             MethodVisitor methodVisitor,
@@ -47,9 +48,21 @@ public final class MethodProbeAdviceAdapter extends AdviceAdapter {
             String descriptor,
             int methodId,
             String fqcnMethod) {
+        this(methodVisitor, access, name, descriptor, methodId, fqcnMethod, new Label());
+    }
+
+    protected MethodProbeAdviceAdapter(
+            MethodVisitor methodVisitor,
+            int access,
+            String name,
+            String descriptor,
+            int methodId,
+            String fqcnMethod,
+            Label handlerLabel) {
         super(Opcodes.ASM9, methodVisitor, access, name, descriptor);
         this.methodId = methodId;
         this.fqcnMethod = fqcnMethod;
+        this.handlerLabel = handlerLabel == null ? new Label() : handlerLabel;
     }
 
     @Override
@@ -62,6 +75,7 @@ public final class MethodProbeAdviceAdapter extends AdviceAdapter {
     protected void onMethodEnter() {
         push(methodId);
         visitLdcInsn(fqcnMethod);
+        loadArgArray();
         visitMethodInsn(INVOKESTATIC, BRIDGE_OWNER, "enter", ENTER_DESC, false);
         visitLabel(startLabel);
     }

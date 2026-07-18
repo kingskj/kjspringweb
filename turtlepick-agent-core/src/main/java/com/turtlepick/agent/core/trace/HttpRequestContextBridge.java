@@ -23,13 +23,30 @@ public final class HttpRequestContextBridge {
     }
 
     public static void safeExit() {
+        safeExit(null, false);
+    }
+
+    public static void safeExit(Object response, boolean exceptionPropagated) {
         try {
-            HttpRequestContextHolder.clear();
+            Integer status;
+            if (!exceptionPropagated) {
+                status = readStatus(response);
+            } else if (isCommitted(response)) {
+                // 전파돼도 응답이 이미 커밋됐으면 status는 최종값이라 신뢰한다 (C안).
+                status = readStatus(response);
+            } else {
+                // 전파 + 미커밋: 컨테이너가 이후 status를 바꿀 수 있어 신뢰 불가 → fail-safe.
+                status = null;
+            }
+            RuntimeMethodBridge.finishHttpRequest(status, exceptionPropagated);
         } catch (Throwable t) {
             if (isFatal(t)) {
                 throw (Error) t;
             }
+            RuntimeMethodBridge.finishHttpRequest(null, exceptionPropagated);
             AgentLog.warn("http context clear skipped cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+        } finally {
+            HttpRequestContextHolder.clear();
         }
     }
 
@@ -57,6 +74,44 @@ public final class HttpRequestContextBridge {
         Method method = target.getClass().getMethod(methodName);
         Object value = method.invoke(target);
         return value == null ? null : String.valueOf(value);
+    }
+
+    private static Integer readStatus(Object response) {
+        if (response == null) {
+            return null;
+        }
+        try {
+            Method method = response.getClass().getMethod("getStatus");
+            Object value = method.invoke(response);
+            if (value instanceof Number) {
+                return Integer.valueOf(((Number) value).intValue());
+            }
+            if (value != null) {
+                return Integer.valueOf(String.valueOf(value));
+            }
+        } catch (Throwable t) {
+            if (isFatal(t)) {
+                throw (Error) t;
+            }
+            AgentLog.warn("http status read skipped cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+        }
+        return null;
+    }
+
+    private static boolean isCommitted(Object response) {
+        if (response == null) {
+            return false;
+        }
+        try {
+            Method method = response.getClass().getMethod("isCommitted");
+            Object value = method.invoke(response);
+            return value instanceof Boolean && ((Boolean) value).booleanValue();
+        } catch (Throwable t) {
+            if (isFatal(t)) {
+                throw (Error) t;
+            }
+            return false;
+        }
     }
 
     private static String normalizeMethod(String method) {

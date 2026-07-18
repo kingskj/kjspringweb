@@ -31,16 +31,46 @@ public final class MyBatisMapperProxyTransformer implements ClassFileTransformer
             return null;
         }
 
+        try {
+            if (TransformedClassDumper.isEnabled()) {
+                TransformedClassDumper.dump("pre-reorder", className,
+                        transformClass(loader, className, classfileBuffer, false));
+            }
+            byte[] transformed = transformClass(loader, className, classfileBuffer, true);
+            TransformedClassDumper.dump("post-reorder", className, transformed);
+            AgentLog.info("mybatis mapper proxy hook installed target=" + className);
+            return transformed;
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("mybatis mapper proxy transform skipped className=" + className
+                    + " cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+            return null;
+        }
+    }
+
+    private byte[] transformClass(
+            ClassLoader loader,
+            String className,
+            byte[] classfileBuffer,
+            boolean reorderAgentCatchAll) {
+
         ClassReader reader = new ClassReader(classfileBuffer);
         ClassWriter writer = new SafeClassWriter(reader, loader);
         ClassVisitor visitor = new MyBatisMapperProxyClassVisitor(
                 writer,
+                className,
                 MAPPER_PROXY_METHOD,
-                MAPPER_PROXY_DESC
+                MAPPER_PROXY_DESC,
+                reorderAgentCatchAll
         );
         reader.accept(visitor, ClassReader.EXPAND_FRAMES);
-        AgentLog.info("mybatis mapper proxy hook installed target=" + className);
         return writer.toByteArray();
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        return throwable.getMessage() == null ? "" : throwable.getMessage();
     }
 
     private static final class SafeClassWriter extends ClassWriter {

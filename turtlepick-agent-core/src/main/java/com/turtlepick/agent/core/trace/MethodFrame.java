@@ -7,13 +7,15 @@ public final class MethodFrame {
     private final int methodId;
     private final String fqcnMethod;
     private final long startNanoTime;
+    private final Object[] args;
 
-    public MethodFrame(int callId, int parentCallId, int methodId, String fqcnMethod, long startNanoTime) {
+    public MethodFrame(int callId, int parentCallId, int methodId, String fqcnMethod, long startNanoTime, Object[] args) {
         this.callId = callId;
         this.parentCallId = parentCallId;
         this.methodId = methodId;
         this.fqcnMethod = fqcnMethod;
         this.startNanoTime = startNanoTime;
+        this.args = args;
     }
 
     public int getCallId() {
@@ -34,5 +36,9 @@ public final class MethodFrame {
 
     public long getStartNanoTime() {
         return startNanoTime;
+    }
+
+    public Object[] getArgs() {
+        return args;
     }
 }

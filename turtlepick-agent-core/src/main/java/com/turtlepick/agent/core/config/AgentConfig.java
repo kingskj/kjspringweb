@@ -25,6 +25,7 @@ public final class AgentConfig {
     private final boolean errorArgsEnabled;
     private final int errorArgsMaxLength;
     private final String[] errorArgsExcludeClasses;
+    private final BusinessErrorConfig businessErrorConfig;
     private final boolean instrumentationHttp;
     private final boolean instrumentationService;
     private final boolean instrumentationSqlDatasourceProxy;
@@ -44,6 +45,9 @@ public final class AgentConfig {
         this.errorArgsEnabled = builder.errorArgsEnabled;
         this.errorArgsMaxLength = builder.errorArgsMaxLength;
         this.errorArgsExcludeClasses = copyOf(builder.errorArgsExcludeClasses);
+        this.businessErrorConfig = builder.businessErrorConfig == null
+                ? BusinessErrorConfig.disabled()
+                : builder.businessErrorConfig;
         this.instrumentationHttp = builder.instrumentationHttp;
         this.instrumentationService = builder.instrumentationService;
         this.instrumentationSqlDatasourceProxy = builder.instrumentationSqlDatasourceProxy;
@@ -110,6 +114,10 @@ public final class AgentConfig {
         return copyOf(errorArgsExcludeClasses);
     }
 
+    public BusinessErrorConfig getBusinessErrorConfig() {
+        return businessErrorConfig;
+    }
+
     public boolean isInstrumentationHttp() {
         return instrumentationHttp;
     }
@@ -141,6 +149,7 @@ public final class AgentConfig {
         private boolean errorArgsEnabled = true;
         private int errorArgsMaxLength = 10000;
         private String[] errorArgsExcludeClasses = AgentConfig.defaultErrorArgsExcludeClasses();
+        private BusinessErrorConfig businessErrorConfig = BusinessErrorConfig.disabled();
         private boolean instrumentationHttp = true;
         private boolean instrumentationService = true;
         private boolean instrumentationSqlDatasourceProxy = true;
@@ -211,6 +220,11 @@ public final class AgentConfig {
 
         public Builder errorArgsExcludeClasses(String[] value) {
             this.errorArgsExcludeClasses = copyOf(value);
+            return this;
+        }
+
+        public Builder businessErrorConfig(BusinessErrorConfig value) {
+            this.businessErrorConfig = value == null ? BusinessErrorConfig.disabled() : value;
             return this;
         }
 
