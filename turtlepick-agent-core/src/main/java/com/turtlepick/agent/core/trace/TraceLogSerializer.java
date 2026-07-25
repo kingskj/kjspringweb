@@ -68,43 +68,51 @@ public final class TraceLogSerializer {
     }
 
     private static String serializeCompact(RuntimeTraceContext context, List<CompletedNode> nodes) {
+        boolean traceError = context.isTraceError();
         StringBuilder builder = new StringBuilder(192);
         builder.append('{');
         appendStringField(builder, "f", "t");
         appendStringField(builder, "rid", context.getTraceId());
         appendNumberField(builder, "ts", Long.valueOf(context.getOccurredAtMs()));
         appendNumberField(builder, "ep", context.getEndpointId());
-        appendBooleanField(builder, "e", context.hasError());
-        if (context.hasError()) {
-            // 유닛4d: e:true면 erk 필수(slow 계약 불변식). agent는 현재 exception만 캡처하므로 하드코딩.
-            // slow 트랙 추가 시 hasError만으로 판정 금지 — errorKind 상태값을 context에 올려야 한다(park).
-            appendStringField(builder, "erk", "exception");
+        appendBooleanField(builder, "e", traceError);
+        if (traceError) {
+            appendStringField(builder, "erk", context.getErrorKind());
+        }
+        if (context.hasSlowObserved()) {
+            appendNumberField(builder, "du", Long.valueOf(context.getDurationMs()));
+            appendNumberField(builder, "th", Integer.valueOf(context.getThresholdMs()));
         }
         appendCompactError(builder, context);
-        if (shouldWriteHttpStatus(context)) {
+        if (shouldWriteHttpStatus(context, traceError)) {
             appendNumberField(builder, "hs", context.getHttpStatus());
         }
-        appendCompactNodes(builder, nodes, context.getOccurredAtMs());
+        appendCompactNodes(builder, nodes, context.getOccurredAtMs(), traceError);
         builder.append('}');
         return builder.toString();
     }
 
     private static String serializeVerbose(RuntimeTraceContext context, List<CompletedNode> nodes) {
+        boolean traceError = context.isTraceError();
         StringBuilder builder = new StringBuilder(256);
         builder.append('{');
         appendStringField(builder, "recordKind", "trace");
         appendStringField(builder, "requestId", context.getTraceId());
         appendNumberField(builder, "occurredAt", Long.valueOf(context.getOccurredAtMs()));
         appendNumberField(builder, "endpointId", context.getEndpointId());
-        appendBooleanField(builder, "error", context.hasError());
-        if (context.hasError()) {
-            appendStringField(builder, "errorKind", "exception");
+        appendBooleanField(builder, "error", traceError);
+        if (traceError) {
+            appendStringField(builder, "errorKind", context.getErrorKind());
+        }
+        if (context.hasSlowObserved()) {
+            appendNumberField(builder, "durationMs", Long.valueOf(context.getDurationMs()));
+            appendNumberField(builder, "thresholdMs", Integer.valueOf(context.getThresholdMs()));
         }
         appendVerboseError(builder, context);
-        if (shouldWriteHttpStatus(context)) {
+        if (shouldWriteHttpStatus(context, traceError)) {
             appendNumberField(builder, "httpStatus", context.getHttpStatus());
         }
-        appendVerboseNodes(builder, nodes, context.getOccurredAtMs());
+        appendVerboseNodes(builder, nodes, context.getOccurredAtMs(), traceError);
         builder.append('}');
         return builder.toString();
     }
@@ -267,7 +275,7 @@ public final class TraceLogSerializer {
         builder.append('}');
     }
 
-    private static void appendCompactNodes(StringBuilder builder, List<CompletedNode> nodes, long occurredAtMs) {
+    private static void appendCompactNodes(StringBuilder builder, List<CompletedNode> nodes, long occurredAtMs, boolean traceError) {
         appendFieldName(builder, "n");
         builder.append('[');
         for (int i = 0; i < nodes.size(); i++) {
@@ -285,12 +293,13 @@ public final class TraceLogSerializer {
             builder.append(",\"et\":");
             appendJsonString(builder, formatNodeTime(occurredAtMs, node.getEndOffsetMs()));
             appendCompactParams(builder, node.getParams());
+            appendCompactSql(builder, node.getSqlPayloads(), traceError);
             builder.append('}');
         }
         builder.append(']');
     }
 
-    private static void appendVerboseNodes(StringBuilder builder, List<CompletedNode> nodes, long occurredAtMs) {
+    private static void appendVerboseNodes(StringBuilder builder, List<CompletedNode> nodes, long occurredAtMs, boolean traceError) {
         appendFieldName(builder, "nodes");
         builder.append('[');
         for (int i = 0; i < nodes.size(); i++) {
@@ -308,14 +317,15 @@ public final class TraceLogSerializer {
             builder.append(",\"endedAt\":");
             appendJsonString(builder, formatNodeTime(occurredAtMs, node.getEndOffsetMs()));
             appendVerboseParams(builder, node.getParams());
+            appendVerboseSql(builder, node.getSqlPayloads(), traceError);
             builder.append('}');
         }
         builder.append(']');
     }
 
-    private static boolean shouldWriteHttpStatus(RuntimeTraceContext context) {
+    private static boolean shouldWriteHttpStatus(RuntimeTraceContext context, boolean traceError) {
         return context.getHttpStatus() != null
-                && (context.hasError() || context.shouldEmitHttpStatus());
+                && (traceError || context.shouldEmitHttpStatus());
     }
 
     private static void appendCompactParams(StringBuilder builder, List<TraceParam> params) {
@@ -480,6 +490,125 @@ public final class TraceLogSerializer {
     private static void appendBooleanField(StringBuilder builder, String key, boolean value) {
         appendFieldName(builder, key);
         builder.append(value);
+    }
+
+    // 유닛2: SQL payload는 e:true(exception/slow) trace에만 출력한다(traceError). e:false면 미출력.
+    // 키는 trace v2 §5-3: compact q/qs/qb/qe/qr. bind는 typed object({i,s,vc,v,t,n}).
+    // errorClass는 trace에 출력하지 않는다(실패 여부는 요청 err{}가 담당). rowCount null이면 qr 생략.
+    private static void appendCompactSql(StringBuilder builder, List<TraceSql> sqlPayloads, boolean traceError) {
+        if (!traceError || sqlPayloads == null || sqlPayloads.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "q");
+        builder.append('[');
+        for (int i = 0; i < sqlPayloads.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            TraceSql sql = sqlPayloads.get(i);
+            StringBuilder sqlBuilder = new StringBuilder(128);
+            sqlBuilder.append('{');
+            appendStringField(sqlBuilder, "qs", sql.getStatement());
+            appendCompactBinds(sqlBuilder, sql.getBinds());
+            appendFieldName(sqlBuilder, "qe");
+            sqlBuilder.append(sql.getElapsedMs());
+            if (sql.getRowCount() != null) {
+                appendFieldName(sqlBuilder, "qr");
+                sqlBuilder.append(sql.getRowCount().longValue());
+            }
+            sqlBuilder.append('}');
+            builder.append(sqlBuilder);
+        }
+        builder.append(']');
+    }
+
+    private static void appendCompactBinds(StringBuilder builder, List<TraceSqlBind> binds) {
+        appendFieldName(builder, "qb");
+        builder.append('[');
+        if (binds != null) {
+            for (int i = 0; i < binds.size(); i++) {
+                if (i > 0) {
+                    builder.append(',');
+                }
+                TraceSqlBind bind = binds.get(i);
+                StringBuilder bindBuilder = new StringBuilder(64);
+                bindBuilder.append('{');
+                appendFieldName(bindBuilder, "i");
+                bindBuilder.append(bind.getIndex());
+                appendStringField(bindBuilder, "s", bind.getSetter());
+                if (!bind.isNullValue()) {
+                    appendStringField(bindBuilder, "vc", bind.getValueClassName());
+                    appendStringField(bindBuilder, "v", bind.getValueText());
+                }
+                if (bind.getSqlType() != null) {
+                    appendFieldName(bindBuilder, "t");
+                    bindBuilder.append(bind.getSqlType().intValue());
+                }
+                appendFieldName(bindBuilder, "n");
+                bindBuilder.append(bind.isNullValue());
+                bindBuilder.append('}');
+                builder.append(bindBuilder);
+            }
+        }
+        builder.append(']');
+    }
+
+    private static void appendVerboseSql(StringBuilder builder, List<TraceSql> sqlPayloads, boolean traceError) {
+        if (!traceError || sqlPayloads == null || sqlPayloads.isEmpty()) {
+            return;
+        }
+        appendFieldName(builder, "sql");
+        builder.append('[');
+        for (int i = 0; i < sqlPayloads.size(); i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            TraceSql sql = sqlPayloads.get(i);
+            StringBuilder sqlBuilder = new StringBuilder(160);
+            sqlBuilder.append('{');
+            appendStringField(sqlBuilder, "statement", sql.getStatement());
+            appendVerboseBinds(sqlBuilder, sql.getBinds());
+            appendFieldName(sqlBuilder, "elapsedMs");
+            sqlBuilder.append(sql.getElapsedMs());
+            if (sql.getRowCount() != null) {
+                appendFieldName(sqlBuilder, "rowCount");
+                sqlBuilder.append(sql.getRowCount().longValue());
+            }
+            sqlBuilder.append('}');
+            builder.append(sqlBuilder);
+        }
+        builder.append(']');
+    }
+
+    private static void appendVerboseBinds(StringBuilder builder, List<TraceSqlBind> binds) {
+        appendFieldName(builder, "binds");
+        builder.append('[');
+        if (binds != null) {
+            for (int i = 0; i < binds.size(); i++) {
+                if (i > 0) {
+                    builder.append(',');
+                }
+                TraceSqlBind bind = binds.get(i);
+                StringBuilder bindBuilder = new StringBuilder(96);
+                bindBuilder.append('{');
+                appendFieldName(bindBuilder, "index");
+                bindBuilder.append(bind.getIndex());
+                appendStringField(bindBuilder, "setter", bind.getSetter());
+                if (!bind.isNullValue()) {
+                    appendStringField(bindBuilder, "valueClass", bind.getValueClassName());
+                    appendStringField(bindBuilder, "value", bind.getValueText());
+                }
+                if (bind.getSqlType() != null) {
+                    appendFieldName(bindBuilder, "sqlType");
+                    bindBuilder.append(bind.getSqlType().intValue());
+                }
+                appendFieldName(bindBuilder, "nullValue");
+                bindBuilder.append(bind.isNullValue());
+                bindBuilder.append('}');
+                builder.append(bindBuilder);
+            }
+        }
+        builder.append(']');
     }
 
     private static void appendFieldName(StringBuilder builder, String key) {

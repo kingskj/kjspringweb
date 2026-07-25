@@ -24,6 +24,16 @@ public final class TurtlepickConfigLoader {
             "turtlepick.agent.business-error.exclude-http-statuses";
     private static final String BUSINESS_ERROR_RULE_PREFIX =
             "turtlepick.agent.business-error.rules.";
+    private static final String SLOW_ENABLED_KEY =
+            "turtlepick.agent.slow.enabled";
+    private static final String SLOW_THRESHOLD_KEY =
+            "turtlepick.agent.slow.threshold-ms";
+    private static final String SLOW_EXCLUDE_PREFIX =
+            "turtlepick.agent.slow.excludes.";
+    private static final String SQL_CAPTURE_ENABLED_KEY =
+            "turtlepick.agent.sql.capture.enabled";
+    private static final String SQL_CAPTURE_MAX_BIND_VALUE_LENGTH_KEY =
+            "turtlepick.agent.sql.capture.max-bind-value-length";
 
     public AgentConfig load(File agentJarFile) {
         File configFile = resolveConfigFile(agentJarFile);
@@ -31,6 +41,8 @@ public final class TurtlepickConfigLoader {
         AgentConfig config = bind(properties);
         validate(config);
         logBusinessErrorSummary(config.getBusinessErrorConfig());
+        logSlowTraceSummary(config.getSlowTraceConfig());
+        logSqlCaptureSummary(config.getSqlCaptureConfig());
         AgentLog.info("config loaded path=" + configFile.getAbsolutePath());
         return config;
     }
@@ -96,6 +108,8 @@ public final class TurtlepickConfigLoader {
                         AgentConfig.defaultErrorArgsExcludeClasses()
                 ))
                 .businessErrorConfig(parseBusinessErrorConfig(properties))
+                .slowTraceConfig(parseSlowTraceConfig(properties))
+                .sqlCaptureConfig(parseSqlCaptureConfig(properties))
                 .instrumentationHttp(getBoolean(properties, "turtlepick.agent.instrumentation.http", true))
                 .instrumentationService(getBoolean(properties, "turtlepick.agent.instrumentation.service", true))
                 .instrumentationSqlDatasourceProxy(getBoolean(properties, "turtlepick.agent.instrumentation.sql.datasource-proxy", true))
@@ -192,6 +206,124 @@ public final class TurtlepickConfigLoader {
                 || "exclude-codes".equals(field);
     }
 
+    private SlowTraceConfig parseSlowTraceConfig(Properties properties) {
+        boolean enabled = getBoolean(properties, SLOW_ENABLED_KEY, false);
+        if (!enabled) {
+            return SlowTraceConfig.disabled();
+        }
+
+        Integer thresholdMs = parseSlowThreshold(properties.getProperty(SLOW_THRESHOLD_KEY));
+        if (thresholdMs == null) {
+            return SlowTraceConfig.disabled();
+        }
+
+        Map<String, SlowRuleDraft> drafts = new LinkedHashMap<String, SlowRuleDraft>();
+        for (Object keyObject : properties.keySet()) {
+            String key = String.valueOf(keyObject);
+            if (!key.startsWith(SLOW_EXCLUDE_PREFIX)) {
+                continue;
+            }
+            String suffix = key.substring(SLOW_EXCLUDE_PREFIX.length());
+            int dot = suffix.lastIndexOf('.');
+            if (dot <= 0 || dot == suffix.length() - 1) {
+                AgentLog.warn("slow exclude rule ignored key=" + key + " cause=INVALID_RULE_KEY");
+                continue;
+            }
+
+            String ruleId = trimToNull(suffix.substring(0, dot));
+            String field = trimToNull(suffix.substring(dot + 1));
+            if (ruleId == null || field == null) {
+                AgentLog.warn("slow exclude rule ignored key=" + key + " cause=INVALID_RULE_KEY");
+                continue;
+            }
+            if (!isRuleIdValid(ruleId)) {
+                AgentLog.warn("slow exclude rule ignored"
+                        + " ruleId=" + ruleId
+                        + " cause=INVALID_RULE_ID");
+                continue;
+            }
+            if (!isSlowExcludeField(field)) {
+                AgentLog.warn("slow exclude rule field ignored"
+                        + " ruleId=" + ruleId
+                        + " field=" + field
+                        + " cause=UNKNOWN_FIELD");
+                continue;
+            }
+
+            SlowRuleDraft draft = drafts.get(ruleId);
+            if (draft == null) {
+                draft = new SlowRuleDraft(ruleId);
+                drafts.put(ruleId, draft);
+            }
+            draft.put(field, properties.getProperty(key));
+        }
+
+        List<SlowExcludeRule> rules = new ArrayList<SlowExcludeRule>();
+        for (SlowRuleDraft draft : drafts.values()) {
+            SlowExcludeRule rule = draft.toRule();
+            if (rule.isValid()) {
+                rules.add(rule);
+            } else {
+                AgentLog.warn("slow exclude rule ignored"
+                        + " ruleId=" + draft.ruleId
+                        + " cause=INVALID_SELECTOR_COUNT");
+            }
+        }
+        return new SlowTraceConfig(true, thresholdMs.intValue(), rules);
+    }
+
+    private SqlCaptureConfig parseSqlCaptureConfig(Properties properties) {
+        boolean enabled = getBoolean(properties, SQL_CAPTURE_ENABLED_KEY, false);
+        int maxBindValueLength = getInt(properties, SQL_CAPTURE_MAX_BIND_VALUE_LENGTH_KEY, 512);
+        if (maxBindValueLength <= 0) {
+            AgentLog.warn("sql capture max bind length defaulted"
+                    + " value=" + maxBindValueLength
+                    + " default=512");
+            maxBindValueLength = 512;
+        }
+        return new SqlCaptureConfig(enabled, maxBindValueLength);
+    }
+
+    private Integer parseSlowThreshold(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            AgentLog.warn("slow trace disabled cause=THRESHOLD_MISSING");
+            return null;
+        }
+        try {
+            int thresholdMs = Integer.parseInt(normalized);
+            if (thresholdMs <= 0) {
+                AgentLog.warn("slow trace disabled thresholdMs=" + thresholdMs + " cause=THRESHOLD_INVALID");
+                return null;
+            }
+            return Integer.valueOf(thresholdMs);
+        } catch (NumberFormatException e) {
+            AgentLog.warn("slow trace disabled value=" + normalized + " cause=THRESHOLD_INVALID");
+            return null;
+        }
+    }
+
+    private boolean isSlowExcludeField(String field) {
+        return "endpoint-id".equals(field) || "method".equals(field);
+    }
+
+    private boolean isRuleIdValid(String ruleId) {
+        if (ruleId == null || ruleId.length() == 0) {
+            return false;
+        }
+        for (int i = 0; i < ruleId.length(); i++) {
+            char ch = ruleId.charAt(i);
+            boolean valid = (ch >= 'a' && ch <= 'z')
+                    || (ch >= 'A' && ch <= 'Z')
+                    || (ch >= '0' && ch <= '9')
+                    || ch == '-';
+            if (!valid) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void validate(AgentConfig config) {
         if (isEmpty(config.getEngineBaseUrl())) {
             throw new IllegalArgumentException("turtlepick.engine.base-url is required");
@@ -284,6 +416,22 @@ public final class TurtlepickConfigLoader {
                 + " ruleIds=" + value.describeRuleIds());
     }
 
+    private void logSlowTraceSummary(SlowTraceConfig config) {
+        SlowTraceConfig value = config == null ? SlowTraceConfig.disabled() : config;
+        AgentLog.info("slow trace loaded"
+                + " enabled=" + value.isEnabled()
+                + " thresholdMs=" + value.getThresholdMs()
+                + " excludes=" + value.getExcludes().size()
+                + " ruleIds=" + value.describeRuleIds());
+    }
+
+    private void logSqlCaptureSummary(SqlCaptureConfig config) {
+        SqlCaptureConfig value = config == null ? SqlCaptureConfig.disabled() : config;
+        AgentLog.info("sql capture loaded"
+                + " enabled=" + value.isEnabled()
+                + " maxBindValueLength=" + value.getMaxBindValueLength());
+    }
+
     private String normalizeClassPattern(String value) {
         if ("byte[]".equals(value)) {
             return "[B";
@@ -338,6 +486,29 @@ public final class TurtlepickConfigLoader {
 
         private BusinessErrorRule toRule() {
             return new BusinessErrorRule(ruleId, exceptionClassName, codeAccessor, excludeCodes);
+        }
+    }
+
+    private final class SlowRuleDraft {
+
+        private final String ruleId;
+        private String endpointId;
+        private String method;
+
+        private SlowRuleDraft(String ruleId) {
+            this.ruleId = ruleId;
+        }
+
+        private void put(String field, String value) {
+            if ("endpoint-id".equals(field)) {
+                endpointId = trimToNull(value);
+            } else if ("method".equals(field)) {
+                method = trimToNull(value);
+            }
+        }
+
+        private SlowExcludeRule toRule() {
+            return new SlowExcludeRule(ruleId, endpointId, method);
         }
     }
 

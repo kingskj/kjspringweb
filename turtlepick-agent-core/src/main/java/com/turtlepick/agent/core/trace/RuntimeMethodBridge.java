@@ -1,6 +1,7 @@
 package com.turtlepick.agent.core.trace;
 
 import com.turtlepick.agent.core.config.BusinessErrorConfig;
+import com.turtlepick.agent.core.config.SlowTraceConfig;
 import com.turtlepick.agent.core.state.AgentStateHolder;
 import com.turtlepick.agent.core.state.EndpointResolver;
 import com.turtlepick.agent.core.state.InterfaceMethodRegistry;
@@ -24,6 +25,7 @@ public final class RuntimeMethodBridge {
     private static volatile BusinessErrorConfig businessErrorConfig = BusinessErrorConfig.disabled();
     private static volatile BusinessErrorMatcher businessErrorMatcher =
             new BusinessErrorMatcher(BusinessErrorConfig.disabled());
+    private static volatile SlowTraceConfig slowTraceConfig = SlowTraceConfig.disabled();
 
     private RuntimeMethodBridge() {
     }
@@ -58,7 +60,8 @@ public final class RuntimeMethodBridge {
             if (match == null) {
                 return 0;
             }
-            enter(match.getMethodId(), match.getFqcnMethod(), args);
+            // JPA Repository inherited frame → SQL attach 허용(true).
+            enter(match.getMethodId(), match.getFqcnMethod(), args, true);
             return match.getMethodId();
         } catch (Throwable t) {
             if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
@@ -87,7 +90,8 @@ public final class RuntimeMethodBridge {
             if (match == null) {
                 return 0;
             }
-            enter(match.getMethodId(), match.getFqcnMethod(), args);
+            // MyBatis Mapper declared frame → SQL attach 허용(true).
+            enter(match.getMethodId(), match.getFqcnMethod(), args, true);
             return match.getMethodId();
         } catch (Throwable t) {
             if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
@@ -118,11 +122,20 @@ public final class RuntimeMethodBridge {
         businessErrorMatcher = new BusinessErrorMatcher(effectiveConfig);
     }
 
+    public static void installSlowTraceConfig(SlowTraceConfig config) {
+        slowTraceConfig = config == null ? SlowTraceConfig.disabled() : config;
+    }
+
     public static void enter(int methodId, String fqcnMethod) {
         enter(methodId, fqcnMethod, null);
     }
 
     public static void enter(int methodId, String fqcnMethod, Object[] args) {
+        // 일반 method probe(Controller/Service/Component) 경로 → SQL attach 불가(false).
+        enter(methodId, fqcnMethod, args, false);
+    }
+
+    public static void enter(int methodId, String fqcnMethod, Object[] args, boolean sqlAttachAllowed) {
         RuntimeTraceContext context = TraceContextHolder.get();
 
         if (context != null && context.isPendingHttpFlush()) {
@@ -138,7 +151,7 @@ public final class RuntimeMethodBridge {
         }
 
         boolean root = context.isEmpty();
-        context.push(methodId, fqcnMethod, args);
+        context.push(methodId, fqcnMethod, args, sqlAttachAllowed);
 
         if (root) {
             EndpointResolver resolver = endpointResolver;
@@ -206,6 +219,7 @@ public final class RuntimeMethodBridge {
         context.addCompletedNode(top, exitNanoTime);
 
         if (context.isEmpty()) {
+            context.markTraceEnd(exitNanoTime);
             if (context.isHttpTrace()) {
                 context.markPendingHttpFlush();
             } else {
@@ -215,6 +229,10 @@ public final class RuntimeMethodBridge {
     }
 
     public static void finishHttpRequest(Integer status, boolean exceptionPropagated) {
+        finishHttpRequest(status, exceptionPropagated, System.nanoTime());
+    }
+
+    public static void finishHttpRequest(Integer status, boolean exceptionPropagated, long finishNanoTime) {
         try {
             RuntimeTraceContext context = TraceContextHolder.get();
             if (context == null) {
@@ -223,6 +241,7 @@ public final class RuntimeMethodBridge {
             if (context.isPendingHttpFlush()) {
                 // status는 safeExit(C안)에서 committed면 최종값, unknown이면 null로 이미 결정됨.
                 context.attachHttpStatus(status);
+                context.attachHttpExitNanoTime(finishNanoTime);
                 flushAndClear(context);
                 return;
             }
@@ -247,6 +266,7 @@ public final class RuntimeMethodBridge {
             AgentStateHolder holder = agentStateHolder;
             if (holder == null || holder.isLogOn()) {
                 context.finalizeBusinessErrorDecision(businessErrorConfig);
+                context.finalizeSlowDecision(slowTraceConfig);
                 context.materializeParams(errorArgOptions);
                 TraceLogWriter.write(context);
             }

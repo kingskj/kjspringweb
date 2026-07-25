@@ -26,6 +26,8 @@ public final class AgentConfig {
     private final int errorArgsMaxLength;
     private final String[] errorArgsExcludeClasses;
     private final BusinessErrorConfig businessErrorConfig;
+    private final SlowTraceConfig slowTraceConfig;
+    private final SqlCaptureConfig sqlCaptureConfig;
     private final boolean instrumentationHttp;
     private final boolean instrumentationService;
     private final boolean instrumentationSqlDatasourceProxy;
@@ -48,6 +50,12 @@ public final class AgentConfig {
         this.businessErrorConfig = builder.businessErrorConfig == null
                 ? BusinessErrorConfig.disabled()
                 : builder.businessErrorConfig;
+        this.slowTraceConfig = builder.slowTraceConfig == null
+                ? SlowTraceConfig.disabled()
+                : builder.slowTraceConfig;
+        this.sqlCaptureConfig = builder.sqlCaptureConfig == null
+                ? SqlCaptureConfig.disabled()
+                : builder.sqlCaptureConfig;
         this.instrumentationHttp = builder.instrumentationHttp;
         this.instrumentationService = builder.instrumentationService;
         this.instrumentationSqlDatasourceProxy = builder.instrumentationSqlDatasourceProxy;
@@ -118,6 +126,14 @@ public final class AgentConfig {
         return businessErrorConfig;
     }
 
+    public SlowTraceConfig getSlowTraceConfig() {
+        return slowTraceConfig;
+    }
+
+    public SqlCaptureConfig getSqlCaptureConfig() {
+        return sqlCaptureConfig;
+    }
+
     public boolean isInstrumentationHttp() {
         return instrumentationHttp;
     }
@@ -150,6 +166,8 @@ public final class AgentConfig {
         private int errorArgsMaxLength = 10000;
         private String[] errorArgsExcludeClasses = AgentConfig.defaultErrorArgsExcludeClasses();
         private BusinessErrorConfig businessErrorConfig = BusinessErrorConfig.disabled();
+        private SlowTraceConfig slowTraceConfig = SlowTraceConfig.disabled();
+        private SqlCaptureConfig sqlCaptureConfig = SqlCaptureConfig.disabled();
         private boolean instrumentationHttp = true;
         private boolean instrumentationService = true;
         private boolean instrumentationSqlDatasourceProxy = true;
@@ -225,6 +243,16 @@ public final class AgentConfig {
 
         public Builder businessErrorConfig(BusinessErrorConfig value) {
             this.businessErrorConfig = value == null ? BusinessErrorConfig.disabled() : value;
+            return this;
+        }
+
+        public Builder slowTraceConfig(SlowTraceConfig value) {
+            this.slowTraceConfig = value == null ? SlowTraceConfig.disabled() : value;
+            return this;
+        }
+
+        public Builder sqlCaptureConfig(SqlCaptureConfig value) {
+            this.sqlCaptureConfig = value == null ? SqlCaptureConfig.disabled() : value;
             return this;
         }
 

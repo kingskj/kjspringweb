@@ -13,6 +13,7 @@ public final class CompletedNode {
     private final long startOffsetMs;
     private final long endOffsetMs;
     private final Object[] args;
+    private final List<TraceSql> sqlPayloads;
     private List<TraceParam> params = Collections.emptyList();
 
     public CompletedNode(
@@ -22,7 +23,8 @@ public final class CompletedNode {
             String fqcnMethod,
             long startOffsetMs,
             long endOffsetMs,
-            Object[] args
+            Object[] args,
+            List<TraceSql> sqlPayloads
     ) {
         this.callId = callId;
         this.parentCallId = parentCallId;
@@ -31,6 +33,9 @@ public final class CompletedNode {
         this.startOffsetMs = startOffsetMs;
         this.endOffsetMs = endOffsetMs;
         this.args = args;
+        this.sqlPayloads = sqlPayloads == null || sqlPayloads.isEmpty()
+                ? Collections.<TraceSql>emptyList()
+                : Collections.unmodifiableList(new ArrayList<TraceSql>(sqlPayloads));
     }
 
     public int getCallId() {
@@ -59,6 +64,10 @@ public final class CompletedNode {
 
     public Object[] getArgs() {
         return args;
+    }
+
+    public List<TraceSql> getSqlPayloads() {
+        return sqlPayloads;
     }
 
     public void attachParams(List<TraceParam> value) {

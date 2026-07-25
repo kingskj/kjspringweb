@@ -27,6 +27,7 @@ public final class HttpRequestContextBridge {
     }
 
     public static void safeExit(Object response, boolean exceptionPropagated) {
+        long exitNanoTime = System.nanoTime();
         try {
             Integer status;
             if (!exceptionPropagated) {
@@ -38,12 +39,12 @@ public final class HttpRequestContextBridge {
                 // 전파 + 미커밋: 컨테이너가 이후 status를 바꿀 수 있어 신뢰 불가 → fail-safe.
                 status = null;
             }
-            RuntimeMethodBridge.finishHttpRequest(status, exceptionPropagated);
+            RuntimeMethodBridge.finishHttpRequest(status, exceptionPropagated, exitNanoTime);
         } catch (Throwable t) {
             if (isFatal(t)) {
                 throw (Error) t;
             }
-            RuntimeMethodBridge.finishHttpRequest(null, exceptionPropagated);
+            RuntimeMethodBridge.finishHttpRequest(null, exceptionPropagated, exitNanoTime);
             AgentLog.warn("http context clear skipped cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
         } finally {
             HttpRequestContextHolder.clear();
@@ -51,6 +52,7 @@ public final class HttpRequestContextBridge {
     }
 
     private static void doEnter(Object request) throws Exception {
+        long enterNanoTime = System.nanoTime();
         if (request == null) {
             HttpRequestContextHolder.clear();
             return;
@@ -67,7 +69,7 @@ public final class HttpRequestContextBridge {
         String contextPath = invokeString(request, "getContextPath");
         String normalizedUri = normalizeRequestUri(requestUri, contextPath);
 
-        HttpRequestContextHolder.set(new HttpRequestContext(method, normalizedUri));
+        HttpRequestContextHolder.set(new HttpRequestContext(method, normalizedUri, enterNanoTime));
     }
 
     private static String invokeString(Object target, String methodName) throws Exception {

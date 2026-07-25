@@ -10,6 +10,7 @@ import com.turtlepick.agent.core.http.EngineLogReadyClient;
 import com.turtlepick.agent.core.http.LogReadyJsonCodec;
 import com.turtlepick.agent.core.http.MetaJsonCodec;
 import com.turtlepick.agent.core.instrument.ApplicationMethodTransformer;
+import com.turtlepick.agent.core.instrument.JdbcDataSourceTransformer;
 import com.turtlepick.agent.core.instrument.MyBatisMapperProxyTransformer;
 import com.turtlepick.agent.core.instrument.SpringAopProxyInvokeTransformer;
 import com.turtlepick.agent.core.instrument.SpringWebRequestTransformer;
@@ -25,6 +26,7 @@ import com.turtlepick.agent.core.trace.AgentHttpBridge;
 import com.turtlepick.agent.core.trace.AgentRuntimeController;
 import com.turtlepick.agent.core.trace.ErrorArgCaptureOptions;
 import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
+import com.turtlepick.agent.core.sql.SqlCaptureBridge;
 import com.turtlepick.agent.core.util.AgentLog;
 
 import java.io.File;
@@ -76,6 +78,8 @@ public final class AgentPremain {
                     config.getErrorArgsExcludeClasses()
             ));
             RuntimeMethodBridge.installBusinessErrorConfig(config.getBusinessErrorConfig());
+            RuntimeMethodBridge.installSlowTraceConfig(config.getSlowTraceConfig());
+            SqlCaptureBridge.install(config.getSqlCaptureConfig());
 
             ApplicationMethodTransformer applicationTransformer =
                     new ApplicationMethodTransformer(MethodProbeIndex.empty());
@@ -86,6 +90,9 @@ public final class AgentPremain {
             }
             inst.addTransformer(new SpringAopProxyInvokeTransformer(), false);
             inst.addTransformer(new MyBatisMapperProxyTransformer(), false);
+            if (config.getSqlCaptureConfig().isEnabled()) {
+                inst.addTransformer(new JdbcDataSourceTransformer(), false);
+            }
 
             AgentRuntimeController runtimeController = new AgentRuntimeController(
                     inst,
@@ -124,7 +131,8 @@ public final class AgentPremain {
                     + " declaredMethodCount=" + result.getDeclaredMethodCount()
                     + " retransformTransformed=" + result.getRetransformSummary().getTransformed()
                     + " retransformFailed=" + result.getRetransformSummary().getFailed()
-                    + " httpInstrumentation=" + config.isInstrumentationHttp());
+                    + " httpInstrumentation=" + config.isInstrumentationHttp()
+                    + " sqlCapture=" + config.getSqlCaptureConfig().isEnabled());
         } catch (Throwable t) {
             AgentLog.error("startup failed; agent disabled", t);
         }

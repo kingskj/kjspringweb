@@ -1,6 +1,7 @@
 package com.turtlepick.agent.core.trace;
 
 import com.turtlepick.agent.core.config.BusinessErrorConfig;
+import com.turtlepick.agent.core.config.SlowTraceConfig;
 import com.turtlepick.agent.core.instrument.MethodSignatureParser;
 import com.turtlepick.agent.core.instrument.ParsedMethodSignature;
 import com.turtlepick.agent.core.state.ResolvedEndpoint;
@@ -19,6 +20,7 @@ public final class RuntimeTraceContext {
     // 유닛4c: emx 계산 실패 케이스를 eniFqcnMethod 기준으로 최초 1회만 warn (에러 폭주 시 로그 폭탄 방지)
     private static final MethodSignatureParser EMX_PARSER = new MethodSignatureParser();
     private static final Set<String> EMX_WARNED = ConcurrentHashMap.newKeySet();
+    private static final Set<String> SLOW_WARNED = ConcurrentHashMap.newKeySet();
 
     private final String traceId;
     private final Deque<MethodFrame> stack = new ArrayDeque<MethodFrame>();
@@ -38,6 +40,9 @@ public final class RuntimeTraceContext {
     private boolean httpTrace;
     private boolean pendingHttpFlush;
     private Integer httpStatus;
+    private Long httpEnterNanoTime;
+    private Long httpExitNanoTime;
+    private long traceEndNanoTime;
     private boolean hasError;
     private Integer errorCallId;
     private String exceptionClass;
@@ -50,6 +55,11 @@ public final class RuntimeTraceContext {
     private boolean errorNodeMismatch;
     private BusinessErrorCandidate businessCandidate;
     private boolean emitHttpStatus;
+    private boolean slowObserved;
+    private long durationMs;
+    private int thresholdMs;
+    private int sqlPayloadCount;
+    private boolean sqlDroppedWarned;
 
     public RuntimeTraceContext() {
         this.traceId = UUID.randomUUID().toString();
@@ -119,6 +129,29 @@ public final class RuntimeTraceContext {
         return hasError;
     }
 
+    public boolean isTraceError() {
+        return hasError || slowObserved;
+    }
+
+    public String getErrorKind() {
+        if (hasError) {
+            return "exception";
+        }
+        return slowObserved ? "slow" : null;
+    }
+
+    public boolean hasSlowObserved() {
+        return slowObserved;
+    }
+
+    public long getDurationMs() {
+        return durationMs;
+    }
+
+    public int getThresholdMs() {
+        return thresholdMs;
+    }
+
     public Integer getErrorCallId() {
         return errorCallId;
     }
@@ -156,10 +189,14 @@ public final class RuntimeTraceContext {
     }
 
     public void push(int methodId, String fqcnMethod) {
-        push(methodId, fqcnMethod, null);
+        push(methodId, fqcnMethod, null, false);
     }
 
     public void push(int methodId, String fqcnMethod, Object[] args) {
+        push(methodId, fqcnMethod, args, false);
+    }
+
+    public void push(int methodId, String fqcnMethod, Object[] args, boolean sqlAttachAllowed) {
         long now = System.nanoTime();
         int parentCallId;
         if (stack.isEmpty()) {
@@ -174,7 +211,7 @@ public final class RuntimeTraceContext {
         }
 
         int callId = ++nextCallId;
-        stack.push(new MethodFrame(callId, parentCallId, methodId, fqcnMethod, now, args));
+        stack.push(new MethodFrame(callId, parentCallId, methodId, fqcnMethod, now, args, sqlAttachAllowed));
     }
 
     public void addCompletedNode(MethodFrame frame, long exitNanoTime) {
@@ -187,7 +224,8 @@ public final class RuntimeTraceContext {
                 frame.getFqcnMethod(),
                 startOffsetMs,
                 endOffsetMs,
-                frame.getArgs()
+                frame.getArgs(),
+                frame.snapshotSqlPayloads()
         ));
     }
 
@@ -301,10 +339,12 @@ public final class RuntimeTraceContext {
             this.httpTrace = true;
             this.requestMethod = httpRequestContext.getMethod();
             this.requestUri = httpRequestContext.getRequestUri();
+            this.httpEnterNanoTime = Long.valueOf(httpRequestContext.getEnterNanoTime());
         } else {
             this.httpTrace = false;
             this.requestMethod = null;
             this.requestUri = null;
+            this.httpEnterNanoTime = null;
         }
     }
 
@@ -314,6 +354,14 @@ public final class RuntimeTraceContext {
 
     public void attachHttpStatus(Integer status) {
         this.httpStatus = status;
+    }
+
+    public void attachHttpExitNanoTime(long nanoTime) {
+        this.httpExitNanoTime = Long.valueOf(nanoTime);
+    }
+
+    public void markTraceEnd(long nanoTime) {
+        this.traceEndNanoTime = nanoTime;
     }
 
     public void finalizeBusinessErrorDecision(BusinessErrorConfig config) {
@@ -359,6 +407,63 @@ public final class RuntimeTraceContext {
         businessCandidate = null;
     }
 
+    public void finalizeSlowDecision(SlowTraceConfig config) {
+        slowObserved = false;
+        durationMs = 0L;
+        thresholdMs = 0;
+
+        SlowTraceConfig effectiveConfig = config == null ? SlowTraceConfig.disabled() : config;
+        if (!effectiveConfig.isEnabled()) {
+            return;
+        }
+
+        Long start = resolveSlowStartNanoTime();
+        Long end = resolveSlowEndNanoTime();
+        if (start == null || end == null) {
+            warnSlowOnce(httpTrace ? "slow_http_timing_missing" : "slow_non_http_timing_missing");
+            return;
+        }
+
+        long elapsedNano = end.longValue() - start.longValue();
+        if (elapsedNano < 0L) {
+            warnSlowOnce("slow_negative_duration");
+            return;
+        }
+
+        long computedDurationMs = elapsedNano / 1000000L;
+        int configuredThresholdMs = effectiveConfig.getThresholdMs();
+        if (computedDurationMs < configuredThresholdMs) {
+            return;
+        }
+        if (effectiveConfig.isExcluded(endpointId, entryFqcnMethod)) {
+            return;
+        }
+
+        slowObserved = true;
+        durationMs = computedDurationMs;
+        thresholdMs = configuredThresholdMs;
+    }
+
+    private Long resolveSlowStartNanoTime() {
+        if (httpTrace) {
+            return httpEnterNanoTime;
+        }
+        return traceStartNanoTime > 0L ? Long.valueOf(traceStartNanoTime) : null;
+    }
+
+    private Long resolveSlowEndNanoTime() {
+        if (httpTrace) {
+            return httpExitNanoTime;
+        }
+        return traceEndNanoTime > 0L ? Long.valueOf(traceEndNanoTime) : null;
+    }
+
+    private static void warnSlowOnce(String reason) {
+        if (SLOW_WARNED.add(reason)) {
+            AgentLog.warn("slow trace skipped cause=" + reason);
+        }
+    }
+
     private void promoteBusinessCandidate() {
         BusinessErrorCandidate candidate = businessCandidate;
         if (candidate == null) {
@@ -394,6 +499,49 @@ public final class RuntimeTraceContext {
         }
     }
 
+    public boolean tryAttachSqlToCurrentFrame(
+            TraceSql sql,
+            int perNodeLimit,
+            int perTraceLimit) {
+        if (sql == null || pendingHttpFlush) {
+            return false;
+        }
+        MethodFrame top = peek();
+        if (top == null) {
+            return false;
+        }
+        // SQL attach 자격은 frame 생성 경로로 결정한다(Repository/Mapper frame만 true).
+        // registry id-set 판정은 declaredMethods 전체 적재로 Service까지 오염시켜 폐기했다.
+        if (!top.isSqlAttachAllowed()) {
+            return false;
+        }
+        if (perTraceLimit <= 0 || sqlPayloadCount >= perTraceLimit) {
+            warnSqlDroppedOnce("TRACE_LIMIT", Integer.valueOf(top.getMethodId()), perTraceLimit);
+            return false;
+        }
+        if (!top.appendSql(sql, perNodeLimit)) {
+            warnSqlDroppedOnce("NODE_LIMIT", Integer.valueOf(top.getMethodId()), perNodeLimit);
+            return false;
+        }
+        sqlPayloadCount++;
+        return true;
+    }
+
+    void warnSqlDroppedOnce(String reason, Integer methodId, int limit) {
+        if (sqlDroppedWarned) {
+            return;
+        }
+        sqlDroppedWarned = true;
+        StringBuilder builder = new StringBuilder(96);
+        builder.append("sql payload dropped traceId=").append(traceId);
+        builder.append(" reason=").append(reason);
+        builder.append(" limit=").append(limit);
+        if (methodId != null) {
+            builder.append(" methodId=").append(methodId.intValue());
+        }
+        AgentLog.warn(builder.toString());
+    }
+
     public MethodFrame peek() {
         return stack.peek();
     }
@@ -424,6 +572,9 @@ public final class RuntimeTraceContext {
         httpTrace = false;
         pendingHttpFlush = false;
         httpStatus = null;
+        httpEnterNanoTime = null;
+        httpExitNanoTime = null;
+        traceEndNanoTime = 0L;
         hasError = false;
         errorCallId = null;
         exceptionClass = null;
@@ -436,6 +587,11 @@ public final class RuntimeTraceContext {
         errorNodeMismatch = false;
         businessCandidate = null;
         emitHttpStatus = false;
+        slowObserved = false;
+        durationMs = 0L;
+        thresholdMs = 0;
+        sqlPayloadCount = 0;
+        sqlDroppedWarned = false;
     }
 
     private static String[] copyOf(String[] value) {
