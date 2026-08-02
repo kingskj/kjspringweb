@@ -5,6 +5,9 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.instrument.ClassFileTransformer;
 import java.security.ProtectionDomain;
 
@@ -43,12 +46,20 @@ public final class ApplicationMethodTransformer implements ClassFileTransformer 
             return null;
         }
 
+        MethodParametersSnapshot methodParametersSnapshot = MethodParametersSnapshot.EMPTY;
+        if (classBeingRedefined != null) {
+            methodParametersSnapshot = loadOriginalMethodParameters(loader, className);
+        }
+
         try {
+            if (classBeingRedefined != null && TransformedClassDumper.isEnabled()) {
+                TransformedClassDumper.dump("raw-retransform-input", className, classfileBuffer);
+            }
             if (TransformedClassDumper.isEnabled()) {
                 TransformedClassDumper.dump("pre-reorder", className,
-                        transformClass(loader, classfileBuffer, index, fqcn, false));
+                        transformClass(loader, classfileBuffer, index, fqcn, false, methodParametersSnapshot));
             }
-            byte[] transformed = transformClass(loader, classfileBuffer, index, fqcn, true);
+            byte[] transformed = transformClass(loader, classfileBuffer, index, fqcn, true, methodParametersSnapshot);
             TransformedClassDumper.dump("post-reorder", className, transformed);
             return transformed;
         } catch (Throwable t) {
@@ -66,13 +77,56 @@ public final class ApplicationMethodTransformer implements ClassFileTransformer 
             byte[] classfileBuffer,
             MethodProbeIndex index,
             String fqcn,
-            boolean reorderAgentCatchAll) {
+            boolean reorderAgentCatchAll,
+            MethodParametersSnapshot methodParametersSnapshot) {
 
         ClassReader reader = new ClassReader(classfileBuffer);
         ClassWriter writer = new SafeClassWriter(reader, loader);
-        ClassVisitor visitor = new ApplicationClassVisitor(writer, index, fqcn, reorderAgentCatchAll);
+        ClassVisitor output = writer;
+        if (methodParametersSnapshot != null && !methodParametersSnapshot.isEmpty()) {
+            output = new MethodParametersRestoringClassVisitor(output, methodParametersSnapshot);
+        }
+        ClassVisitor visitor = new ApplicationClassVisitor(output, index, fqcn, reorderAgentCatchAll);
         reader.accept(visitor, ClassReader.EXPAND_FRAMES);
         return writer.toByteArray();
+    }
+
+    private MethodParametersSnapshot loadOriginalMethodParameters(ClassLoader loader, String className) {
+        String resourceName = className + ".class";
+        InputStream input = null;
+        try {
+            input = loader.getResourceAsStream(resourceName);
+            if (input == null) {
+                AgentLog.warn("method parameters restore skipped cause=RESOURCE_NOT_FOUND className=" + className);
+                return MethodParametersSnapshot.EMPTY;
+            }
+            return MethodParametersSnapshot.extract(readAllBytes(input));
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            AgentLog.warn("method parameters restore skipped className=" + className
+                    + " cause=" + t.getClass().getSimpleName() + ":" + safeMessage(t));
+            return MethodParametersSnapshot.EMPTY;
+        } finally {
+            if (input != null) {
+                try {
+                    input.close();
+                } catch (IOException ignored) {
+                    // ignore close failure
+                }
+            }
+        }
+    }
+
+    private static byte[] readAllBytes(InputStream input) throws IOException {
+        byte[] buffer = new byte[8192];
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
     }
 
     private static String safeMessage(Throwable throwable) {
