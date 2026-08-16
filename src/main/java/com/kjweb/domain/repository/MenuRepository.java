@@ -15,6 +15,9 @@ public interface MenuRepository extends JpaRepository<Menu, Long> {
     List<Menu> findAllByUrlOrderByIdAsc(String url);
     List<Menu> findAllByOrderByIdAsc();
 
+    @Query(value = "SELECT COUNT(*) FROM SYSTEM_RANGE(1, :bound) WHERE MOD(X, 2) = 0", nativeQuery = true)
+    long turtlepickProbeRangeCount(@Param("bound") long bound);
+
     @Modifying
     @Query(value = "DELETE FROM role_menus WHERE menu_id IN (:menuIds)", nativeQuery = true)
     void deleteRoleMenusByMenuIds(@Param("menuIds") List<Long> menuIds);

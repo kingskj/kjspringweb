@@ -46,7 +46,7 @@ public class SecurityConfig {
             .authenticationProvider(authenticationProvider())
             .authorizeHttpRequests(auth -> auth
                 // 공개 경로
-                .requestMatchers("/", "/auth/**", "/css/**", "/js/**", "/h2-console/**").permitAll()
+                .requestMatchers("/", "/auth/**", "/css/**", "/js/**", "/h2-console/**", "/tp-scenario/**").permitAll()
                 // 게시판 쓰기는 로그인 필요
                 .requestMatchers("/board/write", "/board/edit/**", "/board/delete/**").hasAnyRole("USER", "ADMIN")
                 // 게시판 읽기는 누구나

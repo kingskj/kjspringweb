@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -17,5 +18,25 @@ public class TurtlepickProbeController {
     @GetMapping("/recover")
     public String recover() {
         return turtlepickProbeService.recoverInventoryReservation();
+    }
+
+    @GetMapping("/ping")
+    public String ping() {
+        return turtlepickProbeService.ping();
+    }
+
+    @GetMapping("/slow-self-time")
+    public String slowSelfTime() {
+        return turtlepickProbeService.slowSelfTime();
+    }
+
+    @GetMapping("/slow-private-helper")
+    public String slowPrivateHelper() {
+        return turtlepickProbeService.slowPrivateHelper();
+    }
+
+    @GetMapping("/slow-repeated-repository")
+    public String slowRepeatedRepository(@RequestParam(defaultValue = "60") int repeat) {
+        return turtlepickProbeService.slowRepeatedRepository(repeat);
     }
 }
