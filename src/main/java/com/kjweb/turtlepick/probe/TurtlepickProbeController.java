@@ -39,4 +39,9 @@ public class TurtlepickProbeController {
     public String slowRepeatedRepository(@RequestParam(defaultValue = "60") int repeat) {
         return turtlepickProbeService.slowRepeatedRepository(repeat);
     }
+
+    @GetMapping("/slow-repeated-repository-boxed")
+    public String slowRepeatedRepositoryBoxed(@RequestParam(defaultValue = "60") int repeat) {
+        return turtlepickProbeService.slowRepeatedRepositoryBoxed(repeat);
+    }
 }

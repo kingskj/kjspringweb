@@ -76,4 +76,14 @@ public class TurtlepickProbeService {
         }
         return "repeated-repository:" + total;
     }
+
+    @Transactional(readOnly = true)
+    public String slowRepeatedRepositoryBoxed(int repeat) {
+        int safeRepeat = Math.max(1, Math.min(repeat, 120));
+        long total = 0L;
+        for (int i = 0; i < safeRepeat; i++) {
+            total += menuRepository.turtlepickProbeRangeCountBoxed(Long.valueOf(100_000L + i));
+        }
+        return "repeated-repository-boxed:" + total;
+    }
 }

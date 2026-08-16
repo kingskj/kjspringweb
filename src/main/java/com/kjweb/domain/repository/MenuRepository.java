@@ -18,6 +18,11 @@ public interface MenuRepository extends JpaRepository<Menu, Long> {
     @Query(value = "SELECT COUNT(*) FROM SYSTEM_RANGE(1, :bound) WHERE MOD(X, 2) = 0", nativeQuery = true)
     long turtlepickProbeRangeCount(@Param("bound") long bound);
 
+    // 대조군: primitive(long) vs wrapper(Long) 시그니처 차이만 다르게 둔다.
+    // 런타임 trace node 생성 여부를 비교해 probe 미매칭 원인을 가른다.
+    @Query(value = "SELECT COUNT(*) FROM SYSTEM_RANGE(1, :bound) WHERE MOD(X, 2) = 0", nativeQuery = true)
+    Long turtlepickProbeRangeCountBoxed(@Param("bound") Long bound);
+
     @Modifying
     @Query(value = "DELETE FROM role_menus WHERE menu_id IN (:menuIds)", nativeQuery = true)
     void deleteRoleMenusByMenuIds(@Param("menuIds") List<Long> menuIds);
