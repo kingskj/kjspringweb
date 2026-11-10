@@ -9,6 +9,8 @@ import com.turtlepick.agent.core.state.ResolvedEndpoint;
 import com.turtlepick.agent.core.util.AgentLog;
 
 import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 
 public final class RuntimeMethodBridge {
 
@@ -16,6 +18,15 @@ public final class RuntimeMethodBridge {
     private static final String[] EMPTY_PACKAGES = new String[0];
     private static final ErrorArgCaptureOptions DEFAULT_ARG_OPTIONS =
             new ErrorArgCaptureOptions(true, 10000, new String[0]);
+
+    private static final String SPRING_DATA_REPOSITORY = "org.springframework.data.repository.Repository";
+    // 이름 비교라 Spring Data 의존이 없고, ClassValue라 classloader를 붙잡지 않는다.
+    private static final ClassValue<Boolean> SPRING_DATA_REPOSITORY_TYPE = new ClassValue<Boolean>() {
+        @Override
+        protected Boolean computeValue(Class<?> type) {
+            return Boolean.valueOf(hasInterfaceNamed(type, SPRING_DATA_REPOSITORY, new HashSet<Class<?>>()));
+        }
+    };
 
     private static volatile AgentStateHolder agentStateHolder;
     private static volatile EndpointResolver endpointResolver;
@@ -49,7 +60,7 @@ public final class RuntimeMethodBridge {
     public static int enterInterfaceMethod(Object proxy, Method method, Object[] args) {
         try {
             InterfaceMethodRegistry registry = interfaceMethodRegistry;
-            if (registry == null || registry.isEmpty()) {
+            if (registry == null || registry.isAllEmpty()) {
                 return 0;
             }
             RuntimeTraceContext context = TraceContextHolder.get();
@@ -57,6 +68,12 @@ public final class RuntimeMethodBridge {
                 return 0;
             }
             InterfaceMethodRegistry.Match match = registry.lookup(proxy, method);
+            if (match == null && method != null && isSpringDataRepositoryType(method.getDeclaringClass())) {
+                // @Query 등 repository interface에 직접 선언된 DECLARED 메서드.
+                // Service interface·MyBatis Mapper·custom fragment와의 중복 노드를 막기 위해
+                // 선언 interface가 Spring Data Repository 하위일 때만 declared 표를 본다.
+                match = registry.lookupDeclared(method);
+            }
             if (match == null) {
                 return 0;
             }
@@ -70,6 +87,24 @@ public final class RuntimeMethodBridge {
             AgentLog.warn("interface method enter failed cause=" + t.getClass().getSimpleName());
             return 0;
         }
+    }
+
+    private static boolean isSpringDataRepositoryType(Class<?> type) {
+        return type != null && type.isInterface() && SPRING_DATA_REPOSITORY_TYPE.get(type).booleanValue();
+    }
+
+    private static boolean hasInterfaceNamed(Class<?> type, String name, Set<Class<?>> visited) {
+        Class<?>[] interfaces = type.getInterfaces();
+        for (int i = 0; i < interfaces.length; i++) {
+            Class<?> itf = interfaces[i];
+            if (!visited.add(itf)) {
+                continue;
+            }
+            if (name.equals(itf.getName()) || hasInterfaceNamed(itf, name, visited)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static int enterDeclaredInterfaceMethod(Method method) {

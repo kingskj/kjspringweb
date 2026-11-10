@@ -107,6 +107,10 @@ public final class InterfaceMethodRegistry {
         return repositoryMethods.isEmpty();
     }
 
+    public boolean isAllEmpty() {
+        return repositoryMethods.isEmpty() && declaredMethods.isEmpty();
+    }
+
     public boolean isDeclaredEmpty() {
         return declaredMethods.isEmpty();
     }
