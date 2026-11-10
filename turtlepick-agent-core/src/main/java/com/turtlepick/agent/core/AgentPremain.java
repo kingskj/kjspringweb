@@ -13,6 +13,7 @@ import com.turtlepick.agent.core.instrument.ApplicationMethodTransformer;
 import com.turtlepick.agent.core.instrument.JdbcDataSourceTransformer;
 import com.turtlepick.agent.core.instrument.MyBatisMapperProxyTransformer;
 import com.turtlepick.agent.core.instrument.SpringAopProxyInvokeTransformer;
+import com.turtlepick.agent.core.instrument.SpringBatchStepTransformer;
 import com.turtlepick.agent.core.instrument.SpringWebRequestTransformer;
 import com.turtlepick.agent.core.instrument.TomcatFilterChainInterceptTransformer;
 import com.turtlepick.agent.core.instrument.MethodProbeIndex;
@@ -93,6 +94,9 @@ public final class AgentPremain {
             if (config.getSqlCaptureConfig().isEnabled()) {
                 inst.addTransformer(new JdbcDataSourceTransformer(), false);
             }
+            if (config.isInstrumentationBatchFailure()) {
+                inst.addTransformer(new SpringBatchStepTransformer(), false);
+            }
 
             AgentRuntimeController runtimeController = new AgentRuntimeController(
                     inst,
@@ -132,7 +136,8 @@ public final class AgentPremain {
                     + " retransformTransformed=" + result.getRetransformSummary().getTransformed()
                     + " retransformFailed=" + result.getRetransformSummary().getFailed()
                     + " httpInstrumentation=" + config.isInstrumentationHttp()
-                    + " sqlCapture=" + config.getSqlCaptureConfig().isEnabled());
+                    + " sqlCapture=" + config.getSqlCaptureConfig().isEnabled()
+                    + " batchFailure=" + config.isInstrumentationBatchFailure());
         } catch (Throwable t) {
             AgentLog.error("startup failed; agent disabled", t);
         }

@@ -32,6 +32,7 @@ public final class AgentConfig {
     private final boolean instrumentationService;
     private final boolean instrumentationSqlDatasourceProxy;
     private final boolean instrumentationSqlMybatisInterceptor;
+    private final boolean instrumentationBatchFailure;
 
     private AgentConfig(Builder builder) {
         this.engineBaseUrl = builder.engineBaseUrl;
@@ -60,6 +61,7 @@ public final class AgentConfig {
         this.instrumentationService = builder.instrumentationService;
         this.instrumentationSqlDatasourceProxy = builder.instrumentationSqlDatasourceProxy;
         this.instrumentationSqlMybatisInterceptor = builder.instrumentationSqlMybatisInterceptor;
+        this.instrumentationBatchFailure = builder.instrumentationBatchFailure;
     }
 
     public static Builder builder() {
@@ -150,6 +152,10 @@ public final class AgentConfig {
         return instrumentationSqlMybatisInterceptor;
     }
 
+    public boolean isInstrumentationBatchFailure() {
+        return instrumentationBatchFailure;
+    }
+
     public static final class Builder {
 
         private String engineBaseUrl;
@@ -172,6 +178,7 @@ public final class AgentConfig {
         private boolean instrumentationService = true;
         private boolean instrumentationSqlDatasourceProxy = true;
         private boolean instrumentationSqlMybatisInterceptor = false;
+        private boolean instrumentationBatchFailure = true;
 
         private Builder() {
         }
@@ -273,6 +280,11 @@ public final class AgentConfig {
 
         public Builder instrumentationSqlMybatisInterceptor(boolean value) {
             this.instrumentationSqlMybatisInterceptor = value;
+            return this;
+        }
+
+        public Builder instrumentationBatchFailure(boolean value) {
+            this.instrumentationBatchFailure = value;
             return this;
         }
 

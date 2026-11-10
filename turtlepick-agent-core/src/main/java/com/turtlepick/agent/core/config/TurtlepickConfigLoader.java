@@ -114,6 +114,7 @@ public final class TurtlepickConfigLoader {
                 .instrumentationService(getBoolean(properties, "turtlepick.agent.instrumentation.service", true))
                 .instrumentationSqlDatasourceProxy(getBoolean(properties, "turtlepick.agent.instrumentation.sql.datasource-proxy", true))
                 .instrumentationSqlMybatisInterceptor(getBoolean(properties, "turtlepick.agent.instrumentation.sql.mybatis-interceptor", false))
+                .instrumentationBatchFailure(getBoolean(properties, "turtlepick.agent.instrumentation.batch-failure", true))
                 .build();
     }
 

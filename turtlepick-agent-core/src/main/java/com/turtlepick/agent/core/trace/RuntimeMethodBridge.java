@@ -28,6 +28,7 @@ public final class RuntimeMethodBridge {
         }
     };
 
+    private static volatile boolean batchHookWarned;
     private static volatile AgentStateHolder agentStateHolder;
     private static volatile EndpointResolver endpointResolver;
     private static volatile InterfaceMethodRegistry interfaceMethodRegistry;
@@ -226,6 +227,42 @@ public final class RuntimeMethodBridge {
             exitUnsafe(methodId, true, throwable, args);
         } catch (Throwable t) {
             handleExitBridgeFailure(methodId, t);
+        }
+    }
+
+    // AbstractStep.execute 정상 반환 시점. 최종 FAILED이고 Throwable이 기록된 step만 현재 trace의
+    // top frame에 에러로 남긴다. Batch의 실패 판정이라 business 규칙과 무관하게 markError로 표시한다.
+    public static void onBatchStepReturned(Object stepExecution) {
+        try {
+            if (stepExecution == null) {
+                return;
+            }
+            RuntimeTraceContext context = TraceContextHolder.get();
+            if (context == null || context.isPendingHttpFlush()) {
+                return;
+            }
+            MethodFrame top = context.peek();
+            if (top == null) {
+                return;
+            }
+            BatchStepAccess access = BatchStepAccess.CACHE.get(stepExecution.getClass());
+            if (!access.isSupported() || !"FAILED".equals(access.statusName(stepExecution))) {
+                return;
+            }
+            Throwable failure = access.firstFailure(stepExecution);
+            if (failure == null) {
+                return;
+            }
+            ErrorMeta meta = ErrorMetaExtractor.extract(failure, userFramePackages, MAX_USER_FRAMES);
+            context.markError(top.getCallId(), top.getFqcnMethod(), meta, null);
+        } catch (Throwable t) {
+            if (t instanceof VirtualMachineError || t instanceof ThreadDeath) {
+                throw (Error) t;
+            }
+            if (!batchHookWarned) {
+                batchHookWarned = true;
+                AgentLog.warn("batch step hook failed cause=" + t.getClass().getSimpleName());
+            }
         }
     }
 
