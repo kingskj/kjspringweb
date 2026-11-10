@@ -178,7 +178,7 @@ public final class AgentConfig {
         private boolean instrumentationService = true;
         private boolean instrumentationSqlDatasourceProxy = true;
         private boolean instrumentationSqlMybatisInterceptor = false;
-        private boolean instrumentationBatchFailure = true;
+        private boolean instrumentationBatchFailure = false;
 
         private Builder() {
         }
