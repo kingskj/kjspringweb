@@ -142,6 +142,11 @@ public final class RuntimeMethodBridge {
             return;
         }
 
+        boolean root = context == null || context.isEmpty();
+        if (root && !shouldStartRoot(methodId)) {
+            return;
+        }
+
         if (context == null) {
             AgentStateHolder holder = agentStateHolder;
             if (holder != null && !holder.isLogOn()) {
@@ -150,7 +155,6 @@ public final class RuntimeMethodBridge {
             context = TraceContextHolder.getOrCreate();
         }
 
-        boolean root = context.isEmpty();
         context.push(methodId, fqcnMethod, args, sqlAttachAllowed);
 
         if (root) {
@@ -161,6 +165,17 @@ public final class RuntimeMethodBridge {
                 context.attachResolvedEndpoint(resolvedEndpoint, httpRequestContext);
             }
         }
+    }
+
+    // HTTP 문맥 안에서는 메타에 등록된 HTTP 진입 메서드만 trace 루트가 된다.
+    // 핸들러보다 먼저 실행되는 @ModelAttribute·선행 서비스 호출이 루트를 선점하면
+    // 루트 종료 후 pending 상태가 되어 실제 핸들러가 무시된다. HTTP 문맥 밖은 기존과 같다.
+    private static boolean shouldStartRoot(int methodId) {
+        if (HttpRequestContextHolder.get() == null) {
+            return true;
+        }
+        EndpointResolver resolver = endpointResolver;
+        return resolver != null && resolver.hasHttpEntry(methodId);
     }
 
     public static void exit(int methodId, boolean isError) {

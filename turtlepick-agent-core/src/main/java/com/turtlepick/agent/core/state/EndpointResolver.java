@@ -62,6 +62,16 @@ public final class EndpointResolver {
         return ResolvedEndpoint.unresolved("AMBIGUOUS");
     }
 
+    public boolean hasHttpEntry(int entryMethodId) {
+        List<EndpointInfo> candidates = endpointRegistry.findByEntryMethodId(entryMethodId);
+        for (int i = 0; i < candidates.size(); i++) {
+            if (candidates.get(i).isHttp()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     boolean matchesPath(String entryKey, String requestUri) {
         String normalizedPattern = normalizePath(entryKey);
         String normalizedRequestUri = normalizePath(requestUri);
