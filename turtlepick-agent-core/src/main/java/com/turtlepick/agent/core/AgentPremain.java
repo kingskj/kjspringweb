@@ -27,6 +27,7 @@ import com.turtlepick.agent.core.trace.AgentHttpBridge;
 import com.turtlepick.agent.core.trace.AgentRuntimeController;
 import com.turtlepick.agent.core.trace.ErrorArgCaptureOptions;
 import com.turtlepick.agent.core.trace.RuntimeMethodBridge;
+import com.turtlepick.agent.core.trace.TraceLogWriter;
 import com.turtlepick.agent.core.sql.SqlCaptureBridge;
 import com.turtlepick.agent.core.util.AgentLog;
 
@@ -110,6 +111,8 @@ public final class AgentPremain {
                     applicationTransformer,
                     new MethodProbeIndexBuilder());
             AgentHttpBridge.install(runtimeController);
+            Runtime.getRuntime().addShutdownHook(
+                    new Thread(TraceLogWriter::closeForShutdown, "turtlepick-trace-shutdown"));
 
             if (config.isInstrumentationHttp()) {
                 inst.addTransformer(new TomcatFilterChainInterceptTransformer(), false);
